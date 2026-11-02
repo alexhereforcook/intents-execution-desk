@@ -1,0 +1,24 @@
+# secrets
+.env
+*.key.json
+test_agent_key.json
+agent_key.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# local data
+*.db
+*.sqlite
+*.csv
+!docs/**/*.csv
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/
