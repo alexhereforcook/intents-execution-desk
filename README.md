@@ -32,7 +32,12 @@ desk/
   near/signer.py       NEP-413 signing with the agent's ed25519 key
   prices/benchmark.py  benchmark mid from small dry quotes, impact curve
   db/models.py         parent orders, slices, quote snapshots
-  cli.py               command line: impact curve, agent key generation
+  engine/policy.py     adaptive TWAP: trade now or wait (schedule, limits, liquidity recovery)
+  engine/guard.py      refuses live quotes that are far worse than dry quotes / benchmark
+  engine/desk.py       order creation, ticks, shadow and live execution, restart reconciliation
+  tca/metrics.py       implementation shortfall = timing + execution, savings vs one swap
+  worker.py            always-on loop
+  cli.py               command line
 tests/                 unit tests (no network)
 ```
 
@@ -42,7 +47,16 @@ tests/                 unit tests (no network)
 pip install -r requirements.txt
 cp .env.example .env          # put your 1Click API key into ONECLICK_API_KEY
 python -m desk.cli curve RHEA # benchmark + impact curve from dry quotes, no funds needed
+
+# shadow order: real dry quotes, nothing is signed or sent, no funds needed
+python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --hours 4
+python -m desk.cli run        # worker, Ctrl+C to stop; restart any time
+python -m desk.cli status     # progress and TCA report (in another terminal)
 ```
+
+Shadow mode cannot see the agent's own footprint, so each shadow slice also records a
+worst case: the output if liquidity never recovered between slices. The real result
+lands between the two numbers in the report.
 
 ## Run tests
 
