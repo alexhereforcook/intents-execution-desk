@@ -32,12 +32,20 @@ desk/
   near/signer.py       NEP-413 signing with the agent's ed25519 key
   prices/benchmark.py  benchmark mid from small dry quotes, impact curve
   db/models.py         parent orders, slices, quote snapshots
+  cli.py               command line: impact curve, agent key generation
 tests/                 unit tests (no network)
+```
+
+## Try it
+
+```
+pip install -r requirements.txt
+cp .env.example .env          # put your 1Click API key into ONECLICK_API_KEY
+python -m desk.cli curve RHEA # benchmark + impact curve from dry quotes, no funds needed
 ```
 
 ## Run tests
 
 ```
-pip install -r requirements.txt
 pytest
 ```

@@ -3,6 +3,7 @@ sqlmodel>=0.0.22
 pynacl>=1.5
 base58>=2.1
 python-dotenv>=1.0
+psycopg[binary]>=3.1   # Postgres on Render (Neon / Supabase)
 
 # dev
 pytest>=8
