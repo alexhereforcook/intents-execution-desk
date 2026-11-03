@@ -32,7 +32,7 @@ T_TIP = alt.Tooltip("utchoursminutesseconds(time):T", title="time, UTC", format=
 def txt(v, fmt="{:,.2f}"):
     return "" if v is None else fmt.format(v)
 SYMBOLS = {RHEA: "RHEA", AURORA: "AURORA", WNEAR: "wNEAR", USDC_NEAR: "USDC"}
-MAX_ACTIVE_SHADOW = 3
+MAX_ACTIVE_SHADOW = 4
 MAX_ORDER_USD = 50_000
 DEMO_TREASURY = "treasury.sputnik-dao.near"
 
@@ -272,13 +272,45 @@ def show(order_id: int) -> None:
         } for t in reversed(ticks[-200:])]), hide_index=True, use_container_width=True, height=280)
 
 
+def results_table() -> None:
+    """Every finished order in one table: the evidence across tokens, sizes and horizons."""
+    with Session(get_engine()) as s:
+        done = list(s.exec(select(ParentOrder).where(ParentOrder.status == "DONE").order_by(ParentOrder.id)))
+        rows = []
+        for o in done:
+            r = build_report(o, list(s.exec(select(Slice).where(Slice.order_id == o.id))))
+            hours = (aware(o.deadline_at) - aware(o.created_at)).total_seconds() / 3600
+            usd = int(o.total_in) / 10**o.origin_decimals * (o.arrival_mid or 0)
+            rows.append({
+                "order": f"#{o.id}", "mode": o.mode, "token": sym(o.origin_asset),
+                "size, $": f"{usd:,.0f}", "horizon, h": f"{hours:g}", "slices": r.slices,
+                "slice, $": f"{o.slice_usd:,.0f}",
+                "execution, bps": txt(r.execution_bps, "{:.0f}"),
+                "timing, bps": txt(r.timing_bps, "{:.0f}"),
+                "IS, bps": txt(r.is_bps, "{:.0f}"),
+                "one swap at start, bps": "no liquidity" if r.oneshot_bps is None else f"{r.oneshot_bps:.0f}",
+                "saved vs one swap, bps": txt(r.savings_bps, "{:.0f}"),
+                "shadow worst case, bps": txt(r.worst_case_is_bps, "{:.0f}"),
+            })
+    if not rows:
+        st.caption("No finished orders yet.")
+        return
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.caption("Execution = cost of the slices vs the benchmark at each slice (what the agent controls). "
+               "Timing = how the market moved during the order. IS = execution + timing, vs the price at the start.")
+
+
 @st.fragment(run_every=20 if auto else None)
 def live_view():
     if picked is not None:
         show(picked)
 
 
-live_view()
+tab_order, tab_results = st.tabs(["Order", "Results across orders"])
+with tab_order:
+    live_view()
+with tab_results:
+    results_table()
 
 # ---------------- new shadow order ----------------
 st.divider()
