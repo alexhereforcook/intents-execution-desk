@@ -91,6 +91,7 @@ def cmd_new_order(args) -> None:
 def cmd_run(args) -> None:
     from desk.worker import run_forever
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("httpx").setLevel(logging.WARNING)   # one line per HTTP call is noise
     run_forever(load_settings(), every_s=args.every)
 
 
