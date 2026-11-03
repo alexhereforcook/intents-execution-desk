@@ -31,7 +31,7 @@ from desk.oneclick.client import FINAL_STATUSES, NoLiquidity, OneClickClient, On
 from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impact_bps,
                                    micro_mid, sample)
 
-BENCHMARK_TTL_S = 120
+BENCHMARK_TTL_S = 60   # Nov 3 run: with 120 s some slices showed 1-3 bps vs a stale mid
 LIVE_QUOTE_DEADLINE_S = 180
 SHADOW_ACCOUNT = "0" * 64      # dry quotes need an account id; nothing is sent
 TARGET_SLICE_SPACING_S = 300   # aim for roughly one slice every 5 minutes

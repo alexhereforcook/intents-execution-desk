@@ -168,8 +168,10 @@ def tca_chart(r) -> alt.Chart | None:
         x=alt.X("bps:Q", title="cost vs arrival price, bps"),
         color=alt.Color("kind:N", scale=alt.Scale(domain=["agent", "reference"], range=[BLUE, GRAY]), legend=None),
         tooltip=["part:N", alt.Tooltip("bps:Q", format=".1f")])
-    labels = bars.mark_text(align="left", dx=4).encode(text=alt.Text("bps:Q", format=".0f"), color=alt.value(None))
-    return (bars + labels.encode(color=alt.value("#8a8984"))).properties(height=52 * len(rows))
+    df["label_x"] = df["bps"].clip(lower=0)          # labels sit right of the zero line or the bar end
+    labels = alt.Chart(df).mark_text(align="left", dx=4, color=GRAY).encode(
+        y=alt.Y("part:N", sort=order), x="label_x:Q", text=alt.Text("bps:Q", format=".0f"))
+    return (bars + labels).properties(height=52 * len(rows))
 
 
 def curve_chart(o: ParentOrder, curve) -> alt.Chart | None:
