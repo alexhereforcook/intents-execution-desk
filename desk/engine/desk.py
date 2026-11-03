@@ -30,24 +30,11 @@ from desk.near.signer import AgentSigner
 from desk.oneclick.client import FINAL_STATUSES, NoLiquidity, OneClickClient, OneClickError
 from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impact_bps,
                                    micro_mid, sample)
+from desk.prices.pretrade import Pretrade, analyse, choose_slice_usd, estimate_sigma
 
 BENCHMARK_TTL_S = 60   # Nov 3 run: with 120 s some slices showed 1-3 bps vs a stale mid
 LIVE_QUOTE_DEADLINE_S = 180
 SHADOW_ACCOUNT = "0" * 64      # dry quotes need an account id; nothing is sent
-TARGET_SLICE_SPACING_S = 300   # aim for roughly one slice every 5 minutes
-
-
-def choose_slice_usd(order_usd: float, hours: float, curve, soft_bps: float) -> float:
-    """Smallest slice that still fits the horizon, never above what the soft limit allows.
-
-    Smaller slices cost less (RHEA, Nov 3: $1k ~42 bps, $5k ~127 bps), as long as liquidity
-    recovers between them; the horizon caps how many slices there is time for.
-    """
-    max_slices = max(1, int(hours * 3600 * SCHEDULE_END_FRACTION / TARGET_SLICE_SPACING_S))
-    smallest = min(p.usd_size for p in curve.points)
-    size = max(order_usd / max_slices, smallest)
-    cap = curve.max_size_within(soft_bps)
-    return min(size, cap) if cap else smallest
 
 
 @dataclass
@@ -102,6 +89,47 @@ class ExecutionDesk:
             self._log_quote(s, o, "micro", int(p.token_qty * 10**o.origin_decimals), None, mid, p.usd_size)
         self._mids[o.id] = _Mid(mid, now)
         return mid
+
+    # ---------- market data ----------
+    def _stub(self, origin_asset: str, destination_asset: str = USDC_NEAR) -> ParentOrder:
+        t_in, t_out = self.token(origin_asset), self.token(destination_asset)
+        return ParentOrder(origin_asset=origin_asset, origin_decimals=t_in["decimals"],
+                           destination_asset=destination_asset, destination_decimals=t_out["decimals"],
+                           total_in="0", recipient=self.account, deadline_at=self.clock(),
+                           slice_usd=0, hard_limit_bps=0, soft_limit_bps=0)
+
+    def watch_market(self, assets: list[str]) -> None:
+        """Record a benchmark sample per token (feeds the volatility estimate)."""
+        with Session(self.engine) as s:
+            for asset in assets:
+                stub = self._stub(asset)
+                info = TokenInfo(asset, stub.origin_decimals, float(self.token(asset)["price"]))
+                pts = sample(info, stub.destination_decimals, MICRO_SIZES_USD, lambda a: self._dry_out(stub, a))
+                if pts:
+                    s.add(QuoteSnapshot(kind="watch", asset=asset, amount_in="0", mid=micro_mid(pts), ts=self.clock()))
+            s.commit()
+
+    def sigma(self, asset: str) -> tuple[float, str]:
+        from sqlmodel import select
+        with Session(self.engine) as s:
+            rows = s.exec(select(QuoteSnapshot.ts, QuoteSnapshot.mid).where(
+                QuoteSnapshot.asset == asset, QuoteSnapshot.mid.is_not(None),
+                QuoteSnapshot.kind.in_(["watch", "micro"]))).all()
+        return estimate_sigma([(aware(ts), mid) for ts, mid in rows])
+
+    def pretrade(self, *, origin_asset: str, amount_in: int, soft_bps: float,
+                 risk_aversion: float = 1.0) -> Pretrade:
+        stub = self._stub(origin_asset)
+        info = TokenInfo(origin_asset, stub.origin_decimals, float(self.token(origin_asset)["price"]))
+        curve = build_curve(info, stub.destination_decimals, lambda a: self._dry_out(stub, a))
+        order_usd = amount_in / 10**stub.origin_decimals * curve.mid
+        try:
+            out = self._dry_out(stub, amount_in)
+            oneshot = impact_bps(self._price(stub, amount_in, out), curve.mid)
+        except NoLiquidity:
+            oneshot = None
+        sigma, note = self.sigma(origin_asset)
+        return analyse(order_usd, curve, sigma, note, oneshot, soft_bps, risk_aversion)
 
     # ---------- orders ----------
     def create_order(self, *, origin_asset: str, amount_in: int, recipient: str, hours: float,

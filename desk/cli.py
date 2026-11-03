@@ -2,6 +2,7 @@
 
   python -m desk.cli curve RHEA                       impact curve from dry quotes (free)
   python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --hours 4
+  python -m desk.cli pretrade RHEA --usd 25000         cost vs timing risk by horizon (Almgren-Chriss)
   python -m desk.cli run                              worker: ticks active orders forever
   python -m desk.cli status [ORDER_ID]                progress and TCA report
   python -m desk.cli cancel ORDER_ID                  stop an active order
@@ -89,6 +90,25 @@ def cmd_new_order(args) -> None:
     print("start the worker:  python -m desk.cli run")
 
 
+def cmd_pretrade(args) -> None:
+    from desk.worker import build_desk
+    desk = build_desk(load_settings())
+    t = find_token(desk.client.tokens(), args.token)
+    amount = int(args.usd / float(t["price"]) * 10**t["decimals"])
+    p = desk.pretrade(origin_asset=t["assetId"], amount_in=amount, soft_bps=args.soft)
+    print(f"{t['symbol']} ${args.usd:,.0f}; volatility {p.sigma_note}")
+    print(f"{'horizon':>14} | {'slice, $':>9} | {'slices':>6} | {'execution':>9} | {'risk 1σ':>7} | {'cost+risk':>9}")
+    print("-" * 70)
+    for r in p.rows:
+        h = "one swap now" if r.hours == 0 else f"{r.hours:g} h"
+        ex = "no quote" if r.execution_bps is None else f"{r.execution_bps:.0f}"
+        sc = "" if r.score_bps is None else f"{r.score_bps:.0f}"
+        mark = "  <- recommended" if r.hours == p.recommended_hours else ""
+        print(f"{h:>14} | {r.slice_usd:>9,.0f} | {r.slices:>6} | {ex:>9} | {r.risk_bps:>7.0f} | {sc:>9}{mark}")
+    if p.oneshot_bps is None:
+        print("\none swap now: no liquidity for the whole size")
+
+
 def cmd_run(args) -> None:
     from desk.worker import run_forever
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -170,6 +190,12 @@ def main() -> None:
     n.add_argument("--note", help="e.g. Sputnik DAO proposal link")
     n.add_argument("--live", action="store_true", help="really sign and send (needs DESK_MODE=live)")
     n.set_defaults(func=cmd_new_order)
+
+    pt = sub.add_parser("pretrade", help="how long to take: cost vs timing risk by horizon")
+    pt.add_argument("token")
+    pt.add_argument("--usd", type=float, required=True)
+    pt.add_argument("--soft", type=float, default=150)
+    pt.set_defaults(func=cmd_pretrade)
 
     r = sub.add_parser("run", help="worker: tick active orders forever")
     r.add_argument("--every", type=float, default=20, help="seconds between ticks")

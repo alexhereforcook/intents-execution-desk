@@ -11,7 +11,7 @@ import time
 
 from sqlmodel import Session
 
-from desk.config import Settings
+from desk.config import AURORA, RHEA, WNEAR, Settings
 from desk.db.models import active_orders, init_db, make_engine
 from desk.engine.desk import ExecutionDesk
 from desk.near.signer import AgentSigner
@@ -19,6 +19,8 @@ from desk.oneclick.client import OneClickClient
 
 log = logging.getLogger("desk.worker")
 TICK_S = 20
+WATCH_EVERY_S = 300
+WATCH_ASSETS = [RHEA, AURORA, WNEAR]
 
 
 def build_desk(settings: Settings) -> ExecutionDesk:
@@ -31,7 +33,14 @@ def build_desk(settings: Settings) -> ExecutionDesk:
 def run_forever(settings: Settings, every_s: float = TICK_S) -> None:
     desk = build_desk(settings)
     log.info("worker started, mode=%s, agent=%s", settings.mode, desk.account)
+    last_watch = 0.0
     while True:
+        if time.time() - last_watch >= WATCH_EVERY_S:
+            last_watch = time.time()
+            try:
+                desk.watch_market(WATCH_ASSETS)
+            except Exception:
+                log.exception("market watch failed")
         with Session(desk.engine) as s:
             ids = [o.id for o in active_orders(s)]
         for oid in ids:

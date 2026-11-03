@@ -144,3 +144,16 @@ def test_every_tick_is_logged_with_reason(tmp_path):
     assert len(logs) == 6 and all(x.reason for x in logs)
     assert any(x.action == "EXECUTE" for x in logs)
     assert all(x.amount_out for x in curve)          # curve points carry prices for the chart
+
+
+def test_market_watch_and_pretrade(tmp_path):
+    clock, fake, engine, desk, o = setup(tmp_path)
+    for _ in range(30):
+        desk.watch_market([TOKEN])
+        clock.advance(300)
+    sigma, note = desk.sigma(TOKEN)
+    assert "five-minute" in note                       # enough history, not the default
+    p = desk.pretrade(origin_asset=TOKEN, amount_in=SELL, soft_bps=150)
+    assert p.recommended_hours is not None
+    assert p.oneshot_bps is not None and p.oneshot_bps > 500
+    assert all(r.risk_bps >= 0 for r in p.rows)

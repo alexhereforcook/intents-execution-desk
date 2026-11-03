@@ -217,14 +217,14 @@ def show(order_id: int) -> None:
         st.markdown("**Price: benchmark and fills**")
         ch = price_chart(o, slices, ticks)
         if ch:
-            st.altair_chart(ch, use_container_width=True)
+            st.altair_chart(ch, width="stretch")
         else:
             st.caption("No data yet.")
     with right:
         st.markdown("**Schedule vs sold**")
         ch = schedule_chart(o, ticks)
         if ch:
-            st.altair_chart(ch, use_container_width=True)
+            st.altair_chart(ch, width="stretch")
         else:
             st.caption("No data yet.")
 
@@ -233,7 +233,7 @@ def show(order_id: int) -> None:
         st.markdown("**Transaction cost analysis**")
         ch = tca_chart(r)
         if ch:
-            st.altair_chart(ch, use_container_width=True)
+            st.altair_chart(ch, width="stretch")
         else:
             st.caption("Appears after the first slice.")
         if r.worst_case_is_bps is None and o.mode == "shadow" and r.slices:
@@ -244,7 +244,7 @@ def show(order_id: int) -> None:
         st.markdown("**Impact curve when the order was created**")
         ch = curve_chart(o, curve)
         if ch:
-            st.altair_chart(ch, use_container_width=True)
+            st.altair_chart(ch, width="stretch")
         else:
             st.caption("No curve recorded.")
         st.caption("Dashed line: the slice size the agent chose.")
@@ -260,7 +260,7 @@ def show(order_id: int) -> None:
             "worst case": txt(int(x.shadow_worst_out) / 10**o.destination_decimals if x.shadow_worst_out else None)
                           if o.mode == "shadow" else "",
             "recovery, s": txt(x.recovery_s, "{:.0f}"), "note": x.skip_reason or "",
-        } for x in reversed(slices)]), hide_index=True, use_container_width=True)
+        } for x in reversed(slices)]), hide_index=True, width="stretch")
     else:
         st.caption("No slices yet.")
 
@@ -269,7 +269,7 @@ def show(order_id: int) -> None:
         st.dataframe(pd.DataFrame([{
             "time, UTC": aware(t.ts).strftime("%H:%M:%S"), "action": t.action, "reason": t.reason,
             "next-slice cost, bps": txt(t.cost_bps, "{:.1f}"),
-        } for t in reversed(ticks[-200:])]), hide_index=True, use_container_width=True, height=280)
+        } for t in reversed(ticks[-200:])]), hide_index=True, width="stretch", height=280)
 
 
 def results_table() -> None:
@@ -295,7 +295,7 @@ def results_table() -> None:
     if not rows:
         st.caption("No finished orders yet.")
         return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     st.caption("Execution = cost of the slices vs the benchmark at each slice (what the agent controls). "
                "Timing = how the market moved during the order. IS = execution + timing, vs the price at the start.")
 
@@ -313,36 +313,97 @@ with tab_results:
     results_table()
 
 # ---------------- new shadow order ----------------
+AQUA = "#1baf7a"
+HORIZON_CHOICES = [0.5, 1.0, 2.0, 4.0, 6.0]
+
+
+def horizon_label(h: float) -> str:
+    return "one swap now" if h == 0 else f"{h:g} h"
+
+
+def pretrade_chart(p) -> alt.Chart:
+    rows = []
+    for r in p.rows:
+        if r.execution_bps is None:
+            continue
+        lbl = horizon_label(r.hours)
+        rows += [{"horizon": lbl, "series": "Execution cost", "bps": r.execution_bps},
+                 {"horizon": lbl, "series": "Timing risk (1σ)", "bps": r.risk_bps},
+                 {"horizon": lbl, "series": "Cost + risk", "bps": r.score_bps}]
+    df = pd.DataFrame(rows)
+    order = [horizon_label(r.hours) for r in p.rows if r.execution_bps is not None]
+    color = alt.Color("series:N", scale=alt.Scale(domain=["Execution cost", "Timing risk (1σ)", "Cost + risk"],
+                                                  range=[BLUE, ORANGE, AQUA]),
+                      legend=alt.Legend(orient="top", title=None))
+    base = alt.Chart(df).encode(x=alt.X("horizon:N", sort=order, title="time to sell", axis=alt.Axis(labelAngle=0)),
+                                y=alt.Y("bps:Q", title="bps of order value"), color=color,
+                                tooltip=["horizon:N", "series:N", alt.Tooltip("bps:Q", format=".0f")])
+    layers = [base.mark_line(strokeWidth=2), base.mark_point(filled=True, size=70)]
+    if p.recommended_hours is not None:
+        rec = pd.DataFrame({"horizon": [horizon_label(p.recommended_hours)]})
+        layers.append(alt.Chart(rec).mark_rule(color=GRAY, strokeDash=[4, 4]).encode(x=alt.X("horizon:N", sort=order)))
+    return alt.layer(*layers).properties(height=280)
+
+
 st.divider()
-with st.expander("Start a shadow order (free: dry quotes only, nothing is signed or sent)"):
+with st.expander("Start a shadow order (free: dry quotes only, nothing is signed or sent)", expanded=False):
     with Session(get_engine()) as s:
         active = sum(1 for o in s.exec(select(ParentOrder).where(ParentOrder.status == "ACTIVE",
                                                                   ParentOrder.mode == "shadow")))
     if active >= MAX_ACTIVE_SHADOW:
         st.warning(f"{active} shadow orders are already running; try again when one finishes.")
     else:
-        with st.form("new_order"):
-            c1, c2, c3 = st.columns(3)
-            token = c1.selectbox("Sell", ["RHEA", "AURORA", "wNEAR"])
-            usd = c2.number_input("Size, $", min_value=500, max_value=MAX_ORDER_USD, value=25_000, step=500)
-            hours = c3.number_input("Horizon, hours", min_value=0.5, max_value=6.0, value=2.0, step=0.5)
-            c4, c5, c6 = st.columns(3)
-            soft = c4.number_input("Soft limit, bps", min_value=10, max_value=1000, value=150, step=10)
-            hard = c5.number_input("Hard limit, bps", min_value=20, max_value=2000, value=250, step=10)
-            to = c6.text_input("Treasury account (receives USDC)", value=DEMO_TREASURY)
-            go = st.form_submit_button("Start shadow order")
-        if go:
-            if hard <= soft:
-                st.error("Hard limit must be above the soft limit.")
-            else:
-                from desk.cli import find_token
-                from desk.worker import build_desk
-                with st.spinner("Measuring the impact curve with dry quotes..."):
-                    desk = build_desk(load_settings())
-                    t = find_token(desk.client.tokens(), token)
-                    amount = int(usd / float(t["price"]) * 10**t["decimals"])
-                    o = desk.create_order(origin_asset=t["assetId"], amount_in=amount, recipient=to.strip(),
-                                          hours=float(hours), soft_bps=float(soft), hard_bps=float(hard),
-                                          mode="shadow", note="started from the dashboard")
-                st.success(f"Order #{o.id} started. The worker picks it up within 20 seconds.")
-                st.rerun()
+        st.markdown("**1. What to sell**")
+        c1, c2, c3, c4 = st.columns(4)
+        token = c1.selectbox("Sell", ["RHEA", "AURORA", "wNEAR"])
+        usd = c2.number_input("Size, $", min_value=500, max_value=MAX_ORDER_USD, value=25_000, step=500)
+        soft = c3.number_input("Soft limit, bps", min_value=10, max_value=1000, value=150, step=10)
+        hard = c4.number_input("Hard limit, bps", min_value=20, max_value=2000, value=250, step=10)
+        to = st.text_input("Treasury account (receives USDC)", value=DEMO_TREASURY)
+        key = (token, usd, soft)
+
+        if st.button("Analyze: how long should we take?"):
+            from desk.cli import find_token
+            from desk.worker import build_desk
+            with st.spinner("Quoting the impact curve and reading volatility..."):
+                desk = build_desk(load_settings())
+                t = find_token(desk.client.tokens(), token)
+                amount = int(usd / float(t["price"]) * 10**t["decimals"])
+                st.session_state["pretrade"] = (key, desk.pretrade(origin_asset=t["assetId"], amount_in=amount,
+                                                                   soft_bps=float(soft)), t["assetId"], amount)
+
+        saved = st.session_state.get("pretrade")
+        if saved and saved[0] == key:
+            _, p, asset_id, amount = saved
+            st.markdown("**2. Pre-trade analysis** (Almgren–Chriss trade-off)")
+            st.altair_chart(pretrade_chart(p), width="stretch")
+            rec = p.recommended_hours
+            if p.oneshot_bps is None:
+                st.caption(f"One swap of ${usd:,.0f} right now: **no liquidity**.")
+            if rec == 0:
+                st.success(f"{token} is liquid enough: one swap now costs ~{p.oneshot_bps:.0f} bps and beats any "
+                           "schedule once timing risk is counted. The agent is not needed for this order.")
+            elif rec is not None:
+                row = next(r for r in p.rows if r.hours == rec)
+                st.success(f"Recommended: **{horizon_label(rec)}** in ~${row.slice_usd:,.0f} slices — "
+                           f"execution ~{row.execution_bps:.0f} bps, timing risk ±{row.risk_bps:.0f} bps (1σ).")
+            st.caption(f"Volatility: {p.sigma_note}. Execution cost is read from the impact curve measured "
+                       "just now at the slice size each horizon needs; timing risk is σ·√(T/3) for a linear schedule.")
+
+            st.markdown("**3. Start**")
+            default = rec if rec in HORIZON_CHOICES else 2.0
+            hours = st.selectbox("Horizon", HORIZON_CHOICES, index=HORIZON_CHOICES.index(default),
+                                 format_func=horizon_label)
+            if st.button("Start shadow order", type="primary"):
+                if hard <= soft:
+                    st.error("Hard limit must be above the soft limit.")
+                else:
+                    from desk.worker import build_desk
+                    with st.spinner("Creating the order..."):
+                        o = build_desk(load_settings()).create_order(
+                            origin_asset=asset_id, amount_in=amount, recipient=to.strip(), hours=float(hours),
+                            soft_bps=float(soft), hard_bps=float(hard), mode="shadow",
+                            note="started from the dashboard")
+                    st.session_state.pop("pretrade", None)
+                    st.success(f"Order #{o.id} started. The worker picks it up within 20 seconds.")
+                    st.rerun()
