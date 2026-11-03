@@ -162,6 +162,34 @@ def cmd_cancel(args) -> None:
     print(f"order #{args.order_id} cancelled; slices already sent are not affected")
 
 
+def cmd_dao_commands(args) -> None:
+    """Print the near-cli-rs commands for a free testnet DAO demo (nothing is sent from here)."""
+    import base64
+    import json
+    acc, name = args.account, args.dao
+    dao = f"{name}.sputnikv2.testnet"
+    create_args = base64.b64encode(json.dumps({
+        "config": {"name": name, "purpose": "Treasury execution desk demo", "metadata": ""},
+        "policy": [acc]}).encode()).decode()
+    mandate = {"sell": args.sell, "usd": args.usd, "hours": args.hours, "soft": args.soft, "hard": args.hard}
+    proposal = {"proposal": {"description": f"Sell {args.sell} for runway. execution-desk: {json.dumps(mandate)}",
+                             "kind": "Vote"}}
+    tail = f"network-config testnet sign-with-keychain send"
+    print(f"""# 1. testnet account funded by the faucet (free)
+near account create-account sponsor-by-faucet-service {acc} autogenerate-new-keypair save-to-keychain network-config testnet create
+
+# 2. your DAO, you are the only council member (6 testnet NEAR for storage)
+near contract call-function as-transaction sputnikv2.testnet create json-args '{json.dumps({"name": name, "args": create_args})}' prepaid-gas '150.0 Tgas' attached-deposit '6 NEAR' sign-as {acc} {tail}
+
+# 3. the mandate as a proposal (1 testnet NEAR bond, returned after the vote)
+near contract call-function as-transaction {dao} add_proposal json-args '{json.dumps(proposal)}' prepaid-gas '100.0 Tgas' attached-deposit '1 NEAR' sign-as {acc} {tail}
+
+# 4. vote for it (proposal id 0 if this is the DAO's first proposal)
+near contract call-function as-transaction {dao} act_proposal json-args '{json.dumps({"id": 0, "action": "VoteApprove", "proposal": "Vote"})}' prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as {acc} {tail}
+
+# then set DESK_DAOS={dao} (and DESK_DAO_NETWORK=testnet) for the worker""")
+
+
 def cmd_new_key(_args) -> None:
     signer = AgentSigner.generate()
     print("AGENT_SEED_HEX=" + signer.seed_hex)
@@ -208,6 +236,16 @@ def main() -> None:
     cn = sub.add_parser("cancel", help="stop an active order")
     cn.add_argument("order_id", type=int)
     cn.set_defaults(func=cmd_cancel)
+
+    dc = sub.add_parser("dao-commands", help="near-cli-rs commands for a free testnet DAO demo")
+    dc.add_argument("--account", required=True, help="your testnet account, e.g. alexdesk.testnet")
+    dc.add_argument("--dao", required=True, help="DAO name, becomes <name>.sputnikv2.testnet")
+    dc.add_argument("--sell", default="RHEA")
+    dc.add_argument("--usd", type=float, default=25000)
+    dc.add_argument("--hours", type=float, default=2)
+    dc.add_argument("--soft", type=float, default=150)
+    dc.add_argument("--hard", type=float, default=250)
+    dc.set_defaults(func=cmd_dao_commands)
 
     k = sub.add_parser("new-key", help="generate an agent signing key")
     k.set_defaults(func=cmd_new_key)

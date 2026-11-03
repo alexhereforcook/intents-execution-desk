@@ -44,6 +44,7 @@ class ParentOrder(SQLModel, table=True):
     arrival_mid: float | None = None        # benchmark at start (micro-mid)
     oneshot_out: str | None = None          # dry quote for the whole size at start
     note: str | None = None                 # e.g. Sputnik DAO proposal link
+    source: str | None = Field(default=None, index=True)   # "sputnik:<net>:<dao>#<id>" or None
     last_action: str | None = None          # last tick decision, for the dashboard
     finished_at: datetime | None = None
 
@@ -133,6 +134,24 @@ def make_engine(database_url: str):
 
 def init_db(engine) -> None:
     SQLModel.metadata.create_all(engine)
+    _add_missing_columns(engine)
+
+
+def _add_missing_columns(engine) -> None:
+    """create_all never alters existing tables; add new nullable columns to old databases
+    (the Neon database on Render was created before some fields existed)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in SQLModel.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have or not col.nullable:
+                    continue
+                ddl = col.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
 
 
 def active_orders(session: Session) -> list[ParentOrder]:

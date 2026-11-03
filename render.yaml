@@ -14,5 +14,9 @@ services:
         sync: false          # Postgres URL (Neon / Supabase); SQLite on Render is wiped on restart
       - key: DESK_MODE
         value: shadow
+      - key: DESK_DAOS
+        sync: false          # comma-separated Sputnik DAO accounts, e.g. alexdesk.sputnikv2.testnet
+      - key: DESK_DAO_NETWORK
+        value: testnet
       - key: PYTHON_VERSION
         value: 3.12.7

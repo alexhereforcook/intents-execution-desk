@@ -131,11 +131,45 @@ class ExecutionDesk:
         sigma, note = self.sigma(origin_asset)
         return analyse(order_usd, curve, sigma, note, oneshot, soft_bps, risk_aversion)
 
+    # ---------- DAO mandates ----------
+    def asset_for(self, sell: str) -> dict:
+        tokens = self.client.tokens()
+        self._tokens = {t["assetId"]: t for t in tokens}
+        for t in tokens:
+            if t["assetId"] == sell:
+                return t
+        near = [t for t in tokens if t.get("blockchain") == "near" and t["symbol"].lower() == sell.lower()]
+        if not near:
+            raise ValueError(f"token {sell!r} is not available on NEAR through 1Click")
+        return near[0]
+
+    def import_mandates(self, mandates, live_allowed: bool = False) -> list[ParentOrder]:
+        """Create an order for every approved mandate that has none yet (idempotent)."""
+        from sqlmodel import select
+        created = []
+        for m in mandates:
+            with Session(self.engine) as s:
+                if s.exec(select(ParentOrder.id).where(ParentOrder.source == m.source)).first():
+                    continue
+            t = self.asset_for(m.sell)
+            if m.amount_units is not None:
+                amount = m.amount_units
+            elif m.amount_tokens is not None:
+                amount = int(m.amount_tokens * 10**t["decimals"])
+            else:
+                amount = int(m.usd / float(t["price"]) * 10**t["decimals"])
+            mode = "live" if (m.funded and live_allowed and self.signer is not None) else "shadow"
+            created.append(self.create_order(
+                origin_asset=t["assetId"], amount_in=amount, recipient=m.recipient, hours=m.hours,
+                soft_bps=m.soft, hard_bps=m.hard, mode=mode, source=m.source,
+                note=f"Sputnik DAO {m.dao} proposal #{m.proposal_id}"))
+        return created
+
     # ---------- orders ----------
     def create_order(self, *, origin_asset: str, amount_in: int, recipient: str, hours: float,
                      soft_bps: float, hard_bps: float, slice_usd: float | None = None,
                      destination_asset: str = USDC_NEAR, mode: str = "shadow",
-                     note: str | None = None) -> ParentOrder:
+                     note: str | None = None, source: str | None = None) -> ParentOrder:
         if mode == "live" and self.signer is None:
             raise ValueError("live mode needs AGENT_SEED_HEX")
         t_in, t_out = self.token(origin_asset), self.token(destination_asset)
@@ -161,7 +195,7 @@ class ExecutionDesk:
                         deadline_at=now + timedelta(hours=hours), slice_usd=slice_usd,
                         slice_in=str(min(slice_in, amount_in)), hard_limit_bps=hard_bps,
                         soft_limit_bps=soft_bps, arrival_mid=curve.mid,
-                        oneshot_out=None if oneshot is None else str(oneshot), note=note)
+                        oneshot_out=None if oneshot is None else str(oneshot), note=note, source=source)
         with Session(self.engine) as s:
             s.add(o)
             s.commit()

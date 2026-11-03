@@ -50,6 +50,16 @@ def sym(asset: str) -> str:
     return SYMBOLS.get(asset, asset.split(":")[-1][:16])
 
 
+def dao_link(o: ParentOrder) -> str | None:
+    """Markdown link to the DAO on NearBlocks for orders that came from a Sputnik proposal."""
+    if not o.source or not o.source.startswith("sputnik:"):
+        return None
+    _, network, rest = o.source.split(":", 2)
+    dao, pid = rest.split("#")
+    host = "testnet.nearblocks.io" if network == "testnet" else "nearblocks.io"
+    return f"approved by [{dao}](https://{host}/address/{dao}) proposal #{pid}"
+
+
 def load(order_id: int):
     with Session(get_engine()) as s:
         o = s.get(ParentOrder, order_id)
@@ -73,6 +83,7 @@ with st.sidebar:
     if orders:
         labels = {o.id: f"#{o.id} · {sym(o.origin_asset)} · "
                         f"${int(o.total_in) / 10**o.origin_decimals * (o.arrival_mid or 0):,.0f} · {o.mode} · {o.status}"
+                        + (" · DAO" if o.source else "")
                   for o in orders}
         picked = st.radio("Order", list(labels), format_func=labels.get, label_visibility="collapsed")
     else:
@@ -204,7 +215,7 @@ def show(order_id: int) -> None:
     st.subheader(f"Order #{o.id}: sell {total_tokens:,.0f} {sym(o.origin_asset)} → {sym(o.destination_asset)}")
     st.caption(f"{o.mode.upper()} · {o.status} · to `{o.recipient}` · deadline {aware(o.deadline_at):%Y-%m-%d %H:%M} UTC · "
                f"slices ≈ ${o.slice_usd:,.0f} · soft {o.soft_limit_bps:.0f} / hard {o.hard_limit_bps:.0f} bps"
-               + (f" · {o.note}" if o.note else ""))
+               + (f" · {dao_link(o)}" if dao_link(o) else (f" · {o.note}" if o.note else "")))
     if o.mode == "shadow":
         st.info("Shadow mode: every decision uses real 1Click dry quotes, but nothing is signed or sent. "
                 "Fills are recorded at the dry quote; the worst case assumes liquidity never recovers between slices.",
@@ -282,7 +293,8 @@ def results_table() -> None:
             hours = (aware(o.deadline_at) - aware(o.created_at)).total_seconds() / 3600
             usd = int(o.total_in) / 10**o.origin_decimals * (o.arrival_mid or 0)
             rows.append({
-                "order": f"#{o.id}", "mode": o.mode, "token": sym(o.origin_asset),
+                "order": f"#{o.id}", "mode": o.mode, "source": "DAO proposal" if o.source else "dashboard / CLI",
+                "token": sym(o.origin_asset),
                 "size, $": f"{usd:,.0f}", "horizon, h": f"{hours:g}", "slices": r.slices,
                 "slice, $": f"{o.slice_usd:,.0f}",
                 "execution, bps": txt(r.execution_bps, "{:.0f}"),

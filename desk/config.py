@@ -26,6 +26,8 @@ class Settings:
     database_url: str
     agent_seed_hex: str
     mode: str  # "shadow" | "live"
+    daos: tuple[str, ...] = ()       # Sputnik DAO accounts whose approved proposals become orders
+    dao_network: str = "testnet"
 
     @property
     def is_live(self) -> bool:
@@ -41,4 +43,6 @@ def load_settings() -> Settings:
         database_url=os.environ.get("DATABASE_URL", "sqlite:///desk.db").strip(),
         agent_seed_hex=os.environ.get("AGENT_SEED_HEX", "").strip(),
         mode=mode,
+        daos=tuple(d.strip() for d in os.environ.get("DESK_DAOS", "").split(",") if d.strip()),
+        dao_network=os.environ.get("DESK_DAO_NETWORK", "testnet").strip() or "testnet",
     )

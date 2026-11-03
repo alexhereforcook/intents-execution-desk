@@ -21,6 +21,7 @@ log = logging.getLogger("desk.worker")
 TICK_S = 20
 WATCH_EVERY_S = 300
 WATCH_ASSETS = [RHEA, AURORA, WNEAR]
+DAO_EVERY_S = 60
 
 
 def build_desk(settings: Settings) -> ExecutionDesk:
@@ -33,8 +34,28 @@ def build_desk(settings: Settings) -> ExecutionDesk:
 def run_forever(settings: Settings, every_s: float = TICK_S) -> None:
     desk = build_desk(settings)
     log.info("worker started, mode=%s, agent=%s", settings.mode, desk.account)
-    last_watch = 0.0
+    last_watch = last_dao = 0.0
+    rpc = None
+    seen_skips: set[str] = set()
+    if settings.daos:
+        from desk.near.rpc import NearRpc
+        rpc = NearRpc(settings.dao_network)
+        log.info("watching Sputnik DAOs on %s: %s", settings.dao_network, ", ".join(settings.daos))
     while True:
+        if rpc and time.time() - last_dao >= DAO_EVERY_S:
+            last_dao = time.time()
+            from desk.dao.sputnik import approved_mandates
+            for dao in settings.daos:
+                try:
+                    found, skipped = approved_mandates(rpc, dao, desk.account)
+                    for reason in skipped:
+                        if reason not in seen_skips:
+                            seen_skips.add(reason)
+                            log.warning("mandate skipped: %s", reason)
+                    for o in desk.import_mandates(found, live_allowed=settings.is_live):
+                        log.info("order %s created from %s", o.id, o.source)
+                except Exception:
+                    log.exception("DAO %s: reading proposals failed", dao)
         if time.time() - last_watch >= WATCH_EVERY_S:
             last_watch = time.time()
             try:
