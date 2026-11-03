@@ -40,12 +40,18 @@ class ParentOrder(SQLModel, table=True):
     hard_limit_bps: float                   # never sell a slice worse than this vs benchmark
     soft_limit_bps: float                   # preferred quality when ahead of schedule
 
+    slice_in: str = "0"                     # slice size in origin smallest units
     arrival_mid: float | None = None        # benchmark at start (micro-mid)
     oneshot_out: str | None = None          # dry quote for the whole size at start
     note: str | None = None                 # e.g. Sputnik DAO proposal link
+    last_action: str | None = None          # last tick decision, for the dashboard
+    finished_at: datetime | None = None
 
     def total_in_int(self) -> int:
         return int(self.total_in)
+
+    def slice_in_int(self) -> int:
+        return int(self.slice_in)
 
 
 class Slice(SQLModel, table=True):
@@ -58,13 +64,18 @@ class Slice(SQLModel, table=True):
 
     amount_in: str
     mid_at_quote: float | None = None
-    quoted_out: str | None = None           # live (or shadow dry) quote amountOut
-    executed_out: str | None = None         # from status / balance after SUCCESS
+    cost_bps: float | None = None           # dry-quote cost vs benchmark right before trading
+    dry_out: str | None = None              # dry quote amountOut at decision time
+    quoted_out: str | None = None           # live quote amountOut (live mode)
+    quote_deadline: datetime | None = None
+    executed_out: str | None = None         # live: from /status after SUCCESS; shadow: dry quote
+    shadow_worst_out: str | None = None     # shadow: output if liquidity never recovered
+    filled_at: datetime | None = None
     deposit_address: str | None = None
     deposit_memo: str | None = None
     intent_hash: str | None = None
     skip_reason: str | None = None
-    recovery_s: float | None = None         # time for quotes to come back after previous slice
+    recovery_s: float | None = None         # time until quotes came back after THIS slice
 
     def amount_in_int(self) -> int:
         return int(self.amount_in)
@@ -80,6 +91,21 @@ class QuoteSnapshot(SQLModel, table=True):
     amount_in: str
     amount_out: str | None = None           # None = no liquidity
     mid: float | None = None
+
+
+FILLED = ("SUCCESS", "SHADOW_FILLED")
+IN_FLIGHT = ("SIGNED", "SUBMITTED")
+
+
+def aware(dt: datetime | None) -> datetime | None:
+    """SQLite returns naive datetimes; everything here is UTC."""
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def order_slices(session: Session, order_id: int) -> list[Slice]:
+    return list(session.exec(select(Slice).where(Slice.order_id == order_id).order_by(Slice.seq)))
 
 
 def make_engine(database_url: str):
@@ -103,4 +129,4 @@ def active_orders(session: Session) -> list[ParentOrder]:
 def unsettled_slices(session: Session, order_id: int) -> list[Slice]:
     """Slices that were sent out but have no final status yet: reconcile, never resend."""
     return list(session.exec(select(Slice).where(Slice.order_id == order_id,
-                                                 Slice.status.in_(["SIGNED", "SUBMITTED"]))))
+                                                 Slice.status.in_(IN_FLIGHT))))
