@@ -72,9 +72,9 @@ def test_live_run_waits_for_recovery_and_beats_one_shot(tmp_path):
 def test_guard_blocks_bad_live_quote(tmp_path):
     clock, fake, engine, desk, o = setup(tmp_path, mode="live")
     fake.live_quote_haircut = 0.56                    # the Oct 24 case
-    for _ in range(5):
-        desk.tick(o.id)
+    for _ in range(10):
         clock.advance(30)
+        desk.tick(o.id)
     with Session(engine) as s:
         slices = order_slices(s, o.id)
     assert slices and all(x.status == "SKIPPED" and "guard" in x.skip_reason for x in slices)
@@ -83,6 +83,7 @@ def test_guard_blocks_bad_live_quote(tmp_path):
 
 def test_restart_reconciles_instead_of_resending(tmp_path):
     clock, fake, engine, desk, o = setup(tmp_path, mode="live")
+    clock.advance(120)                                # let the schedule ask for something
     desk.tick(o.id)                                   # first slice goes out
     with Session(engine) as s:
         [sl] = order_slices(s, o.id)
@@ -103,6 +104,7 @@ def test_signed_but_never_submitted_is_failed_after_quote_expiry(tmp_path):
     clock, fake, engine, desk, o = setup(tmp_path, mode="live")
     real_submit = fake.submit_intent
     fake.submit_intent = lambda signed: (_ for _ in ()).throw(ConnectionError("crash"))
+    clock.advance(120)
     try:
         desk.tick(o.id)
     except ConnectionError:
@@ -115,3 +117,15 @@ def test_signed_but_never_submitted_is_failed_after_quote_expiry(tmp_path):
     with Session(engine) as s:
         first = order_slices(s, o.id)[0]
     assert first.status == "FAILED" and "not delivered" in first.skip_reason
+
+
+def test_slice_size_follows_horizon():
+    from desk.engine.desk import choose_slice_usd
+    from desk.prices.benchmark import ImpactCurve, PricePoint
+    curve_bps = {500: 30, 1000: 42, 2500: 74, 5000: 127, 10000: 230}
+    pts = tuple(PricePoint(u, 1, 1 - b / 1e4, 1) for u, b in curve_bps.items())
+    curve = ImpactCurve(mid=1.0, points=pts)
+    # Nov 3 case: $25k over 2h -> ~21 slices of ~$1.2k instead of five $5k slices
+    assert 1000 < choose_slice_usd(25_000, 2, curve, 150) < 1300
+    assert choose_slice_usd(2_000, 4, curve, 150) == 500          # never below the smallest sampled size
+    assert choose_slice_usd(500_000, 1, curve, 150) == 5000        # capped by the soft limit

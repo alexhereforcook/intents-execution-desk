@@ -4,6 +4,7 @@
   python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --hours 4
   python -m desk.cli run                              worker: ticks active orders forever
   python -m desk.cli status [ORDER_ID]                progress and TCA report
+  python -m desk.cli cancel ORDER_ID                  stop an active order
   python -m desk.cli new-key                          agent signing key (live mode only)
 """
 
@@ -126,6 +127,21 @@ def cmd_status(args) -> None:
                 print(f"  median liquidity recovery after a slice: {r.median_recovery_s:.0f}s")
 
 
+def cmd_cancel(args) -> None:
+    from desk.worker import build_desk
+    desk = build_desk(load_settings())
+    with Session(desk.engine) as s:
+        o = s.get(ParentOrder, args.order_id)
+        if o is None:
+            sys.exit("no such order")
+        if o.status != "ACTIVE":
+            sys.exit(f"order #{o.id} is already {o.status}")
+        o.status, o.last_action = "CANCELLED", "cancelled from the command line"
+        s.add(o)
+        s.commit()
+    print(f"order #{args.order_id} cancelled; slices already sent are not affected")
+
+
 def cmd_new_key(_args) -> None:
     signer = AgentSigner.generate()
     print("AGENT_SEED_HEX=" + signer.seed_hex)
@@ -162,6 +178,10 @@ def main() -> None:
     st = sub.add_parser("status", help="progress and TCA report")
     st.add_argument("order_id", nargs="?", type=int)
     st.set_defaults(func=cmd_status)
+
+    cn = sub.add_parser("cancel", help="stop an active order")
+    cn.add_argument("order_id", type=int)
+    cn.set_defaults(func=cmd_cancel)
 
     k = sub.add_parser("new-key", help="generate an agent signing key")
     k.set_defaults(func=cmd_new_key)

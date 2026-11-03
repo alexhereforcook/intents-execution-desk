@@ -24,7 +24,7 @@ from desk.config import USDC_NEAR
 from desk.db.models import (FILLED, IN_FLIGHT, ParentOrder, QuoteSnapshot, Slice, aware,
                             order_slices, utcnow)
 from desk.engine.guard import check_live_quote
-from desk.engine.policy import Decision, Limits, TickState, decide
+from desk.engine.policy import SCHEDULE_END_FRACTION, Decision, Limits, TickState, decide
 from desk.near.signer import AgentSigner
 from desk.oneclick.client import FINAL_STATUSES, NoLiquidity, OneClickClient, OneClickError
 from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impact_bps,
@@ -33,6 +33,20 @@ from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impa
 BENCHMARK_TTL_S = 120
 LIVE_QUOTE_DEADLINE_S = 180
 SHADOW_ACCOUNT = "0" * 64      # dry quotes need an account id; nothing is sent
+TARGET_SLICE_SPACING_S = 300   # aim for roughly one slice every 5 minutes
+
+
+def choose_slice_usd(order_usd: float, hours: float, curve, soft_bps: float) -> float:
+    """Smallest slice that still fits the horizon, never above what the soft limit allows.
+
+    Smaller slices cost less (RHEA, Nov 3: $1k ~42 bps, $5k ~127 bps), as long as liquidity
+    recovers between them; the horizon caps how many slices there is time for.
+    """
+    max_slices = max(1, int(hours * 3600 * SCHEDULE_END_FRACTION / TARGET_SLICE_SPACING_S))
+    smallest = min(p.usd_size for p in curve.points)
+    size = max(order_usd / max_slices, smallest)
+    cap = curve.max_size_within(soft_bps)
+    return min(size, cap) if cap else smallest
 
 
 @dataclass
@@ -103,7 +117,8 @@ class ExecutionDesk:
                            slice_usd=0, hard_limit_bps=hard_bps, soft_limit_bps=soft_bps)
         curve = build_curve(info, t_out["decimals"], lambda a: self._dry_out(stub, a))
         if slice_usd is None:
-            slice_usd = curve.max_size_within(soft_bps) or min(p.usd_size for p in curve.points)
+            order_usd = amount_in / 10**t_in["decimals"] * curve.mid
+            slice_usd = choose_slice_usd(order_usd, hours, curve, soft_bps)
         try:
             oneshot = self._dry_out(stub, amount_in)
         except NoLiquidity:

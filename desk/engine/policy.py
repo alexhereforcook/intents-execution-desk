@@ -91,11 +91,12 @@ def decide(s: TickState, lim: Limits) -> Decision:
     if recovered is False:
         return Decision("WAIT", "liquidity not recovered since last slice", recovered=recovered)
 
-    ahead = s.done_in - target_in(s)
-    if s.cost_bps <= lim.soft_bps and ahead < s.slice_in:
+    # A good quote is taken only when the order is not ahead of schedule. Allowing a
+    # slice of slack let the first live run (Nov 3) sell 80% of a 2-hour order in 46 min.
+    if behind <= 0:
+        return Decision("WAIT", "ahead of schedule", recovered=recovered)
+    if s.cost_bps <= lim.soft_bps:
         return Decision("EXECUTE", f"good quote: {s.cost_bps:.0f} bps <= soft {lim.soft_bps:.0f}",
                         amount, recovered)
-    if ahead >= s.slice_in:
-        return Decision("WAIT", "ahead of schedule", recovered=recovered)
     return Decision("WAIT", f"quote {s.cost_bps:.0f} bps, waiting for better (soft {lim.soft_bps:.0f})",
                     recovered=recovered)

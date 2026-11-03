@@ -41,19 +41,34 @@ def test_never_beyond_hard_limit_even_when_behind():
 
 
 def test_waits_for_recovery_then_trades():
-    d = decide(state(10, done=100, cost=90, last_fill_min=8, last_cost=50), LIM)
+    d = decide(state(30, done=100, cost=90, last_fill_min=28, last_cost=50), LIM)
     assert d.action == "WAIT" and d.recovered is False
-    d = decide(state(12, done=100, cost=55, last_fill_min=8, last_cost=50), LIM)
+    d = decide(state(32, done=100, cost=55, last_fill_min=28, last_cost=50), LIM)
     assert d.action == "EXECUTE" and d.recovered is True
 
 
 def test_min_gap():
-    d = decide(state(10, done=100, cost=40, last_fill_min=9.5, last_cost=40), LIM)
+    d = decide(state(30, done=100, cost=40, last_fill_min=29.5, last_cost=40), LIM)
     assert d.action == "WAIT" and "min gap" in d.reason
 
 
 def test_ahead_of_schedule_waits():
     assert decide(state(5, done=300, cost=10, last_fill_min=1, last_cost=10), LIM).action == "WAIT"
+    # even one slice ahead is enough to wait (Nov 3 run sold 80% of a 2h order in 46 min)
+    assert decide(state(30, done=200, cost=10, last_fill_min=20, last_cost=10), LIM).action == "WAIT"
+
+
+def test_progress_tracks_schedule():
+    # simulate 4h with a perfect quote every minute: sold amount never exceeds target + 1 slice
+    done, last = 0, None
+    for m in range(0, 241):
+        st = state(m, done=done, cost=10, last_fill_min=last, last_cost=10 if last is not None else None)
+        d = decide(st, LIM)
+        if d.action == "EXECUTE":
+            done += d.amount_in
+            last = m
+        assert done <= target_in(st) + 100
+    assert done == 1000
 
 
 def test_in_flight_and_finish():
