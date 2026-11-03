@@ -1,0 +1,14 @@
+# Render's free web service sleeps after 15 minutes without inbound requests, which
+# would pause the worker. Ping the dashboard health endpoint every 10 minutes.
+# Set the repository variable DESK_URL (Settings -> Secrets and variables -> Actions -> Variables).
+name: keepalive
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    if: ${{ vars.DESK_URL != '' }}
+    steps:
+      - run: curl -fsS --max-time 60 "${{ vars.DESK_URL }}/_stcore/health"

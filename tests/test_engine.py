@@ -129,3 +129,18 @@ def test_slice_size_follows_horizon():
     assert 1000 < choose_slice_usd(25_000, 2, curve, 150) < 1300
     assert choose_slice_usd(2_000, 4, curve, 150) == 500          # never below the smallest sampled size
     assert choose_slice_usd(500_000, 1, curve, 150) == 5000        # capped by the soft limit
+
+
+def test_every_tick_is_logged_with_reason(tmp_path):
+    from sqlmodel import select
+    from desk.db.models import QuoteSnapshot, TickLog
+    clock, fake, engine, desk, o = setup(tmp_path)
+    for _ in range(6):
+        clock.advance(30)
+        desk.tick(o.id)
+    with Session(engine) as s:
+        logs = list(s.exec(select(TickLog).where(TickLog.order_id == o.id)))
+        curve = list(s.exec(select(QuoteSnapshot).where(QuoteSnapshot.kind == "curve")))
+    assert len(logs) == 6 and all(x.reason for x in logs)
+    assert any(x.action == "EXECUTE" for x in logs)
+    assert all(x.amount_out for x in curve)          # curve points carry prices for the chart

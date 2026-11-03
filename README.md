@@ -38,6 +38,8 @@ desk/
   tca/metrics.py       implementation shortfall = timing + execution, savings vs one swap
   worker.py            always-on loop
   cli.py               command line
+ui/app.py              Streamlit dashboard (also starts shadow orders)
+start.sh, render.yaml  deploy: worker + dashboard in one free Render web service
 tests/                 unit tests (no network)
 ```
 
@@ -52,6 +54,7 @@ python -m desk.cli curve RHEA # benchmark + impact curve from dry quotes, no fun
 python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --hours 4
 python -m desk.cli run        # worker, Ctrl+C to stop; restart any time
 python -m desk.cli status     # progress and TCA report (in another terminal)
+streamlit run ui/app.py       # dashboard: charts, slices, decision log, TCA
 ```
 
 Shadow mode cannot see the agent's own footprint, so each shadow slice also records a

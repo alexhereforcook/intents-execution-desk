@@ -21,10 +21,11 @@ from typing import Callable
 from sqlmodel import Session
 
 from desk.config import USDC_NEAR
-from desk.db.models import (FILLED, IN_FLIGHT, ParentOrder, QuoteSnapshot, Slice, aware,
-                            order_slices, utcnow)
+from desk.db.models import (FILLED, IN_FLIGHT, ParentOrder, QuoteSnapshot, Slice, TickLog,
+                            aware, order_slices, utcnow)
 from desk.engine.guard import check_live_quote
-from desk.engine.policy import SCHEDULE_END_FRACTION, Decision, Limits, TickState, decide
+from desk.engine.policy import (SCHEDULE_END_FRACTION, Decision, Limits, TickState, decide,
+                                target_in)
 from desk.near.signer import AgentSigner
 from desk.oneclick.client import FINAL_STATUSES, NoLiquidity, OneClickClient, OneClickError
 from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impact_bps,
@@ -138,7 +139,8 @@ class ExecutionDesk:
             s.commit()
             s.refresh(o)
             for p in curve.points:
-                self._log_quote(s, o, "curve", int(p.token_qty * 10**o.origin_decimals), None, curve.mid, p.usd_size)
+                self._log_quote(s, o, "curve", int(p.token_qty * 10**o.origin_decimals),
+                                int(p.price * p.token_qty * 10**o.destination_decimals), curve.mid, p.usd_size)
             self._log_quote(s, o, "oneshot", amount_in, oneshot, curve.mid)
             s.commit()
             s.refresh(o)
@@ -196,6 +198,10 @@ class ExecutionDesk:
                     self._live_execute(s, o, sl, dry_out, mid)
                 s.add(sl)
             o.last_action = f"{d.action}: {d.reason}"
+            s.add(TickLog(order_id=o.id, ts=state.now, action=d.action, reason=d.reason,
+                          cost_bps=None if cost == float("inf") else cost, mid=mid,
+                          done_in=str(done_in + (d.amount_in if d.action == "EXECUTE" and o.mode == "shadow" else 0)),
+                          target_in=str(target_in(state))))
             s.add(o)
             s.commit()
             return d

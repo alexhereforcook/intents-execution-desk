@@ -93,6 +93,19 @@ class QuoteSnapshot(SQLModel, table=True):
     mid: float | None = None
 
 
+class TickLog(SQLModel, table=True):
+    """Every decision the agent made, with its reason: the dashboard's decision log."""
+    id: int | None = Field(default=None, primary_key=True)
+    order_id: int = Field(foreign_key="parentorder.id", index=True)
+    ts: datetime = Field(default_factory=utcnow, index=True)
+    action: str                             # EXECUTE | WAIT | FINISH
+    reason: str
+    cost_bps: float | None = None           # next-slice cost vs benchmark at this tick
+    mid: float | None = None
+    done_in: str = "0"                      # sold so far, smallest units
+    target_in: str = "0"                    # schedule target at this tick
+
+
 FILLED = ("SUCCESS", "SHADOW_FILLED")
 IN_FLIGHT = ("SIGNED", "SUBMITTED")
 

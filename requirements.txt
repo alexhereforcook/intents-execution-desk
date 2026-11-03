@@ -4,6 +4,7 @@ pynacl>=1.5
 base58>=2.1
 python-dotenv>=1.0
 psycopg[binary]>=3.1   # Postgres on Render (Neon / Supabase)
+streamlit>=1.66         # dashboard (brings altair and pandas)
 
 # dev
 pytest>=8
