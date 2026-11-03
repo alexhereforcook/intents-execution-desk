@@ -24,7 +24,8 @@ from desk.db.models import (FILLED, ParentOrder, QuoteSnapshot, Slice, TickLog, 
 from desk.tca.metrics import build_report
 
 BLUE, ORANGE, GRAY = "#2a78d6", "#eb6834", "#8a8984"
-X_TIME = dict(title="time, UTC", scale=alt.Scale(type="utc"), axis=alt.Axis(format="%H:%M"))
+X_TIME = dict(title="time, UTC", scale=alt.Scale(type="utc"),
+              axis=alt.Axis(format="%H:%M", tickMinStep=60_000, labelOverlap=True))
 T_TIP = alt.Tooltip("utchoursminutesseconds(time):T", title="time, UTC", format="%H:%M:%S")
 
 
@@ -115,7 +116,7 @@ def price_chart(o: ParentOrder, slices, ticks) -> alt.Chart | None:
     y = alt.Y("price:Q", title=f"{sym(o.destination_asset)} per {sym(o.origin_asset)}", scale=alt.Scale(zero=False))
     if not mids.empty:
         mids["series"] = "Benchmark"
-        layers.append(alt.Chart(mids).mark_line(strokeWidth=2).encode(
+        layers.append(alt.Chart(mids).mark_line(strokeWidth=2, interpolate="step-after").encode(
             x=alt.X("time:T", **X_TIME), y=y, color=color,
             tooltip=[T_TIP, alt.Tooltip("price:Q", format=".6f", title="benchmark")]))
     if o.arrival_mid:
