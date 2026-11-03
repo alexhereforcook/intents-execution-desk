@@ -32,7 +32,7 @@ T_TIP = alt.Tooltip("utchoursminutesseconds(time):T", title="time, UTC", format=
 def txt(v, fmt="{:,.2f}"):
     return "" if v is None else fmt.format(v)
 SYMBOLS = {RHEA: "RHEA", AURORA: "AURORA", WNEAR: "wNEAR", USDC_NEAR: "USDC"}
-MAX_ACTIVE_SHADOW = 4
+MAX_ACTIVE_SHADOW = 5
 MAX_ORDER_USD = 50_000
 DEMO_TREASURY = "treasury.sputnik-dao.near"
 
@@ -362,9 +362,11 @@ with st.expander("Start a shadow order (free: dry quotes only, nothing is signed
     with Session(get_engine()) as s:
         active = sum(1 for o in s.exec(select(ParentOrder).where(ParentOrder.status == "ACTIVE",
                                                                   ParentOrder.mode == "shadow")))
-    if active >= MAX_ACTIVE_SHADOW:
-        st.warning(f"{active} shadow orders are already running; try again when one finishes.")
-    else:
+    full = active >= MAX_ACTIVE_SHADOW
+    if full:
+        st.info(f"{active} shadow orders are running (limit {MAX_ACTIVE_SHADOW}). You can still run the analysis; "
+                "starting a new order unlocks when one finishes.")
+    if True:
         st.markdown("**1. What to sell**")
         c1, c2, c3, c4 = st.columns(4)
         token = c1.selectbox("Sell", ["RHEA", "AURORA", "wNEAR"])
@@ -406,7 +408,7 @@ with st.expander("Start a shadow order (free: dry quotes only, nothing is signed
             default = rec if rec in HORIZON_CHOICES else 2.0
             hours = st.selectbox("Horizon", HORIZON_CHOICES, index=HORIZON_CHOICES.index(default),
                                  format_func=horizon_label)
-            if st.button("Start shadow order", type="primary"):
+            if st.button("Start shadow order", type="primary", disabled=full):
                 if hard <= soft:
                     st.error("Hard limit must be above the soft limit.")
                 else:
