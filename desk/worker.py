@@ -7,7 +7,11 @@ slices are reconciled through GET /v0/status, never sent twice.
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
+
+import httpx
 
 from sqlmodel import Session
 
@@ -22,6 +26,26 @@ TICK_S = 20
 WATCH_EVERY_S = 300
 WATCH_ASSETS = [RHEA, AURORA, WNEAR]
 DAO_EVERY_S = 60
+SELF_PING_EVERY_S = 240
+
+
+def _self_ping_forever(url: str) -> None:
+    """Render's free web service sleeps after 15 minutes without inbound requests, and the
+    worker sleeps with it. The GitHub Actions ping alone proved unreliable (scheduled runs
+    are often late), so the service also requests its own public URL every 4 minutes."""
+    while True:
+        time.sleep(SELF_PING_EVERY_S)
+        try:
+            httpx.get(f"{url.rstrip('/')}/_stcore/health", timeout=30)
+        except httpx.HTTPError as e:
+            log.warning("self-ping failed: %s", e)
+
+
+def start_self_ping() -> None:
+    url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("DESK_URL")
+    if url:
+        threading.Thread(target=_self_ping_forever, args=(url,), daemon=True).start()
+        log.info("self-ping every %ss: %s", SELF_PING_EVERY_S, url)
 
 
 def build_desk(settings: Settings) -> ExecutionDesk:
@@ -34,6 +58,7 @@ def build_desk(settings: Settings) -> ExecutionDesk:
 def run_forever(settings: Settings, every_s: float = TICK_S) -> None:
     desk = build_desk(settings)
     log.info("worker started, mode=%s, agent=%s", settings.mode, desk.account)
+    start_self_ping()
     last_watch = last_dao = 0.0
     rpc = None
     seen_skips: set[str] = set()

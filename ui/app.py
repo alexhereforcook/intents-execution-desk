@@ -147,6 +147,8 @@ def schedule_chart(o: ParentOrder, ticks) -> alt.Chart | None:
     total = int(o.total_in)
     rows = []
     for t in ticks:
+        if t.action == "PAUSE":
+            continue
         rows.append({"time": aware(t.ts), "series": "Schedule", "share": int(t.target_in) / total})
         rows.append({"time": aware(t.ts), "series": "Sold", "share": int(t.done_in) / total})
     if not rows:
@@ -295,7 +297,8 @@ def results_table() -> None:
             rows.append({
                 "order": f"#{o.id}", "mode": o.mode, "source": "DAO proposal" if o.source else "dashboard / CLI",
                 "token": sym(o.origin_asset),
-                "size, $": f"{usd:,.0f}", "horizon, h": f"{hours:g}", "slices": r.slices,
+                "size, $": f"{usd:,.0f}", "sold": f"{r.progress:.0%}", "horizon, h": f"{hours:g}",
+                "slices": r.slices,
                 "slice, $": f"{o.slice_usd:,.0f}",
                 "execution, bps": txt(r.execution_bps, "{:.0f}"),
                 "timing, bps": txt(r.timing_bps, "{:.0f}"),
@@ -308,7 +311,8 @@ def results_table() -> None:
         st.caption("No finished orders yet.")
         return
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    st.caption("Execution = cost of the slices vs the benchmark at each slice (what the agent controls). "
+    st.caption("Sold below 100% = the deadline came first; the rest stays with the treasury. "
+               "Execution = cost of the slices vs the benchmark at each slice (what the agent controls). "
                "Timing = how the market moved during the order. IS = execution + timing, vs the price at the start.")
 
 

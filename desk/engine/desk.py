@@ -32,6 +32,7 @@ from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impa
                                    micro_mid, sample)
 from desk.prices.pretrade import Pretrade, analyse, choose_slice_usd, estimate_sigma
 
+PAUSE_NOTE_S = 180
 BENCHMARK_TTL_S = 60   # Nov 3 run: with 120 s some slices showed 1-3 bps vs a stale mid
 LIVE_QUOTE_DEADLINE_S = 180
 SHADOW_ACCOUNT = "0" * 64      # dry quotes need an account id; nothing is sent
@@ -216,6 +217,7 @@ class ExecutionDesk:
             if o is None or o.status != "ACTIVE":
                 return Decision("WAIT", "order not active")
             self._reconcile(s, o)
+            self._note_pause(s, o)
             slices = order_slices(s, o.id)
             done_in = sum(x.amount_in_int() for x in slices if x.status in FILLED)
             in_flight = any(x.status in IN_FLIGHT for x in slices)
@@ -267,6 +269,17 @@ class ExecutionDesk:
             s.add(o)
             s.commit()
             return d
+
+    def _note_pause(self, s: Session, o: ParentOrder) -> None:
+        """If the agent was not running for a while (host asleep, restart), say so in the log."""
+        from sqlmodel import select
+        last = s.exec(select(TickLog.ts).where(TickLog.order_id == o.id).order_by(TickLog.ts.desc())).first()
+        if last is None:
+            return
+        gap = (self.clock() - aware(last)).total_seconds()
+        if gap > PAUSE_NOTE_S:
+            s.add(TickLog(order_id=o.id, ts=self.clock(), action="PAUSE",
+                          reason=f"agent was not running for {gap / 60:.0f} min (host asleep or restarting)"))
 
     # ---------- shadow ----------
     def _shadow_fill(self, o: ParentOrder, sl: Slice, sold_before: int, dry_out: int) -> None:

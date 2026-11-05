@@ -157,3 +157,15 @@ def test_market_watch_and_pretrade(tmp_path):
     assert p.recommended_hours is not None
     assert p.oneshot_bps is not None and p.oneshot_bps > 500
     assert all(r.risk_bps >= 0 for r in p.rows)
+
+
+def test_long_gap_is_logged_as_a_pause(tmp_path):
+    from sqlmodel import select
+    from desk.db.models import TickLog
+    clock, fake, engine, desk, o = setup(tmp_path)
+    desk.tick(o.id)
+    clock.advance(40 * 60)                            # host slept for 40 minutes
+    desk.tick(o.id)
+    with Session(engine) as s:
+        actions = [x.action for x in s.exec(select(TickLog).where(TickLog.order_id == o.id).order_by(TickLog.id))]
+    assert actions[1] == "PAUSE"
