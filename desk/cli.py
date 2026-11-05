@@ -6,6 +6,7 @@
   python -m desk.cli run                              worker: ticks active orders forever
   python -m desk.cli status [ORDER_ID]                progress and TCA report
   python -m desk.cli cancel ORDER_ID                  stop an active order
+  python -m desk.cli archive 1 2 3                    hide finished orders from the dashboard
   python -m desk.cli new-key                          agent signing key (live mode only)
 """
 
@@ -162,6 +163,28 @@ def cmd_cancel(args) -> None:
     print(f"order #{args.order_id} cancelled; slices already sent are not affected")
 
 
+def cmd_archive(args) -> None:
+    """Hide finished orders from the dashboard. Nothing is deleted: --undo brings them back."""
+    from desk.worker import build_desk
+    desk = build_desk(load_settings())
+    with Session(desk.engine) as s:
+        for oid in args.order_ids:
+            o = s.get(ParentOrder, oid)
+            if o is None:
+                print(f"#{oid}: no such order")
+                continue
+            if o.status == "ACTIVE":
+                print(f"#{oid}: still active, cancel it first")
+                continue
+            if args.undo:
+                o.note = (o.note or "").replace(" [archived]", "") or None
+            elif "[archived]" not in (o.note or ""):
+                o.note = f"{o.note or ''} [archived]".strip()
+            s.add(o)
+            print(f"#{oid}: {'restored' if args.undo else 'archived'}")
+        s.commit()
+
+
 def cmd_dao_commands(args) -> None:
     """Print the near-cli-rs commands for a free testnet DAO demo (nothing is sent from here)."""
     import base64
@@ -236,6 +259,11 @@ def main() -> None:
     cn = sub.add_parser("cancel", help="stop an active order")
     cn.add_argument("order_id", type=int)
     cn.set_defaults(func=cmd_cancel)
+
+    ar = sub.add_parser("archive", help="hide finished orders from the dashboard (nothing is deleted)")
+    ar.add_argument("order_ids", type=int, nargs="+")
+    ar.add_argument("--undo", action="store_true")
+    ar.set_defaults(func=cmd_archive)
 
     dc = sub.add_parser("dao-commands", help="near-cli-rs commands for a free testnet DAO demo")
     dc.add_argument("--account", required=True, help="your testnet account, e.g. alexdesk.testnet")

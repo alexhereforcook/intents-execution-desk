@@ -76,7 +76,8 @@ st.caption("Sells a DAO treasury position in small slices through NEAR Intents (
            "waits for liquidity to recover between slices, and reports the cost against one big swap.")
 
 with Session(get_engine()) as s:
-    orders = list(s.exec(select(ParentOrder).order_by(ParentOrder.id.desc()).limit(30)))
+    orders = [o for o in s.exec(select(ParentOrder).order_by(ParentOrder.id.desc()).limit(60))
+              if "[archived]" not in (o.note or "")][:30]
 
 with st.sidebar:
     st.subheader("Orders")
@@ -217,7 +218,7 @@ def show(order_id: int) -> None:
     st.subheader(f"Order #{o.id}: sell {total_tokens:,.0f} {sym(o.origin_asset)} → {sym(o.destination_asset)}")
     st.caption(f"{o.mode.upper()} · {o.status} · to `{o.recipient}` · deadline {aware(o.deadline_at):%Y-%m-%d %H:%M} UTC · "
                f"slices ≈ ${o.slice_usd:,.0f} · soft {o.soft_limit_bps:.0f} / hard {o.hard_limit_bps:.0f} bps"
-               + (f" · {dao_link(o)}" if dao_link(o) else (f" · {o.note}" if o.note else "")))
+               + (f" · {dao_link(o)}" if dao_link(o) else (f" · {o.note.replace(' [archived]', '')}" if o.note else "")))
     if o.mode == "shadow":
         st.info("Shadow mode: every decision uses real 1Click dry quotes, but nothing is signed or sent. "
                 "Fills are recorded at the dry quote; the worst case assumes liquidity never recovers between slices.",
@@ -288,7 +289,8 @@ def show(order_id: int) -> None:
 def results_table() -> None:
     """Every finished order in one table: the evidence across tokens, sizes and horizons."""
     with Session(get_engine()) as s:
-        done = list(s.exec(select(ParentOrder).where(ParentOrder.status == "DONE").order_by(ParentOrder.id)))
+        done = [o for o in s.exec(select(ParentOrder).where(ParentOrder.status == "DONE").order_by(ParentOrder.id))
+                if "[archived]" not in (o.note or "")]
         rows = []
         for o in done:
             r = build_report(o, list(s.exec(select(Slice).where(Slice.order_id == o.id))))
