@@ -26,17 +26,30 @@ loss vs. the reference price including the 1Click fee (Oct 23-24, 2026):
 
 On Nov 3, 2026 a $25,000 RHEA sell had **no quote at all** as a single swap.
 
-## Results on live quotes (shadow mode, RHEA -> USDC, $25k, 2 hours, Nov 3, 2026)
+## Results on live quotes (shadow mode, Nov 5, 2026)
 
-| | Run 1: $5k slices | Run 2: ~$1.2k slices |
+Two orders started from the dashboard and left alone; the agent ran them on Render with nobody
+watching.
+
+| | RHEA -> USDC | AURORA -> USDC |
 | --- | --- | --- |
-| Slices | 4 | 21 |
-| Pace | 80% sold in 46 min (ran ahead) | on schedule, done in 1 h 44 min |
-| Execution cost vs benchmark | 128 bps | **33 bps** |
-| One swap at the start | impossible (no liquidity) | impossible (no liquidity) |
+| Size, horizon | $24,822, 2 h | $9,950, 1 h |
+| Sold | 100%, 21 slices of ~$1.2k, on schedule | 100%, 10 slices of ~$1k, on schedule |
+| Execution cost vs benchmark | 44 bps | 63 bps |
+| Timing (market move) | -25 bps (price rose) | +14 bps |
+| Implementation shortfall | **19 bps** | **77 bps** |
+| One swap at the start | **impossible** (no liquidity for $25k) | 802 bps |
+| Saved vs one swap | the sale was possible at all | 725 bps, about $721 |
 
-Run 1 exposed two policy bugs (taking good quotes while ahead of schedule; slices too large).
-Both are fixed and covered by tests; run 2 is the fixed agent.
+How to read this: shadow fills assume liquidity recovered between slices, as measured by the
+next dry quote. The worst case (no recovery at all) is also recorded: 806 bps for AURORA, i.e.
+about the same as one swap. A real run lands between the two; the live path exists to measure
+where.
+
+**What changed since the first run (Nov 3).** The first RHEA run used $5k slices and traded
+whenever quotes looked good: 80% sold in 46 minutes at 128 bps. Fixes: slice size follows the
+horizon (about one slice per 5 minutes), no trading ahead of schedule, and the free host is kept
+awake from inside (it used to sleep and leave orders half sold). All three are covered by tests.
 
 ## Try it
 
@@ -79,7 +92,7 @@ python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --h
 python -m desk.cli run             # the agent; Ctrl+C and restart any time
 python -m desk.cli status          # progress and TCA in the terminal
 streamlit run ui/app.py            # the dashboard
-pytest                             # 57 tests, no network needed
+pytest                             # 58 tests, no network needed
 ```
 
 ## How it works
@@ -175,6 +188,6 @@ desk/
   worker.py, cli.py    always-on loop, command line
 ui/app.py              Streamlit dashboard
 start.sh, render.yaml  one free Render web service: worker + dashboard
-.github/workflows/     keepalive ping so the free service does not sleep
+.github/workflows/     backup keepalive ping (the service also pings itself every 4 min)
 tests/                 unit and engine tests with a fake constant-product pool
 ```
