@@ -27,6 +27,7 @@ WATCH_EVERY_S = 300
 WATCH_ASSETS = [RHEA, AURORA, WNEAR]
 DAO_EVERY_S = 60
 SELF_PING_EVERY_S = 240
+SERIES_EVERY_S = 60
 
 
 def _self_ping_forever(url: str) -> None:
@@ -59,13 +60,16 @@ def run_forever(settings: Settings, every_s: float = TICK_S) -> None:
     desk = build_desk(settings)
     log.info("worker started, mode=%s, agent=%s", settings.mode, desk.account)
     start_self_ping()
-    last_watch = last_dao = 0.0
+    last_watch = last_dao = last_series = 0.0
     rpc = None
     seen_skips: set[str] = set()
     if settings.daos:
         from desk.near.rpc import NearRpc
         rpc = NearRpc(settings.dao_network)
         log.info("watching Sputnik DAOs on %s: %s", settings.dao_network, ", ".join(settings.daos))
+    if settings.series:
+        log.info("evidence series: %s at %s h", ", ".join(f"{t} ${u:,.0f}" for t, u in settings.series),
+                 ", ".join(f"{h:g}" for h in settings.series_hours))
     while True:
         if rpc and time.time() - last_dao >= DAO_EVERY_S:
             last_dao = time.time()
@@ -81,6 +85,13 @@ def run_forever(settings: Settings, every_s: float = TICK_S) -> None:
                         log.info("order %s created from %s", o.id, o.source)
                 except Exception:
                     log.exception("DAO %s: reading proposals failed", dao)
+        if settings.series and time.time() - last_series >= SERIES_EVERY_S:
+            last_series = time.time()
+            try:
+                from desk.series import maybe_start_batch
+                maybe_start_batch(desk, settings.series, settings.series_hours)
+            except Exception:
+                log.exception("evidence series: starting a batch failed")
         if time.time() - last_watch >= WATCH_EVERY_S:
             last_watch = time.time()
             try:

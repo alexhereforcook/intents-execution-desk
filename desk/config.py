@@ -28,6 +28,8 @@ class Settings:
     mode: str  # "shadow" | "live"
     daos: tuple[str, ...] = ()       # Sputnik DAO accounts whose approved proposals become orders
     dao_network: str = "testnet"
+    series: tuple[tuple[str, float], ...] = ()   # (token, usd) rotated through by the evidence series
+    series_hours: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
 
     @property
     def is_live(self) -> bool:
@@ -45,4 +47,16 @@ def load_settings() -> Settings:
         mode=mode,
         daos=tuple(d.strip() for d in os.environ.get("DESK_DAOS", "").split(",") if d.strip()),
         dao_network=os.environ.get("DESK_DAO_NETWORK", "testnet").strip() or "testnet",
+        series=parse_series(os.environ.get("DESK_SERIES", "")),
+        series_hours=tuple(float(h) for h in os.environ.get("DESK_SERIES_HOURS", "0.5,1,2,4").split(",") if h.strip()),
     )
+
+
+def parse_series(spec: str) -> tuple[tuple[str, float], ...]:
+    """"RHEA:25000,AURORA:10000" -> (("RHEA", 25000.0), ("AURORA", 10000.0))"""
+    out = []
+    for part in spec.split(","):
+        if part.strip():
+            sym, usd = part.split(":")
+            out.append((sym.strip(), float(usd)))
+    return tuple(out)

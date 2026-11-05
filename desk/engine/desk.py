@@ -14,6 +14,7 @@ reconciles in-flight slices instead of sending them again.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
@@ -30,7 +31,7 @@ from desk.near.signer import AgentSigner
 from desk.oneclick.client import FINAL_STATUSES, NoLiquidity, OneClickClient, OneClickError
 from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impact_bps,
                                    micro_mid, sample)
-from desk.prices.pretrade import Pretrade, analyse, choose_slice_usd, estimate_sigma
+from desk.prices.pretrade import Pretrade, analyse, choose_slice_usd, cost_at, estimate_sigma
 
 PAUSE_NOTE_S = 180
 BENCHMARK_TTL_S = 60   # Nov 3 run: with 120 s some slices showed 1-3 bps vs a stale mid
@@ -187,6 +188,10 @@ class ExecutionDesk:
             oneshot = self._dry_out(stub, amount_in)
         except NoLiquidity:
             oneshot = None
+        # the pre-trade forecast for this horizon, kept so results can be checked against it
+        sigma, _ = self.sigma(origin_asset)
+        pred_exec = cost_at(curve, slice_usd)
+        pred_risk = sigma * math.sqrt(hours * SCHEDULE_END_FRACTION / 3) * 1e4
 
         now = self.clock()
         slice_in = int(slice_usd / curve.mid * 10**t_in["decimals"])
@@ -196,7 +201,8 @@ class ExecutionDesk:
                         deadline_at=now + timedelta(hours=hours), slice_usd=slice_usd,
                         slice_in=str(min(slice_in, amount_in)), hard_limit_bps=hard_bps,
                         soft_limit_bps=soft_bps, arrival_mid=curve.mid,
-                        oneshot_out=None if oneshot is None else str(oneshot), note=note, source=source)
+                        oneshot_out=None if oneshot is None else str(oneshot), note=note, source=source,
+                        pred_exec_bps=pred_exec, pred_risk_bps=pred_risk)
         with Session(self.engine) as s:
             s.add(o)
             s.commit()
@@ -232,9 +238,8 @@ class ExecutionDesk:
                     mid = self._mid(s, o)
                     dry_out = self._dry_out(o, amount)
                     cost = impact_bps(self._price(o, amount, dry_out), mid)
-                    self._log_quote(s, o, "slice", amount, dry_out, mid)
                 except NoLiquidity:
-                    self._log_quote(s, o, "slice", amount, None, mid)
+                    pass   # cost stays infinite; the tick log records the decision and its reason
 
             state = TickState(now=self.clock(), start=aware(o.created_at), deadline=aware(o.deadline_at),
                               total_in=o.total_in_int(), done_in=done_in, slice_in=o.slice_in_int(),

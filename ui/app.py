@@ -84,7 +84,7 @@ with st.sidebar:
     if orders:
         labels = {o.id: f"#{o.id} · {sym(o.origin_asset)} · "
                         f"${int(o.total_in) / 10**o.origin_decimals * (o.arrival_mid or 0):,.0f} · {o.mode} · {o.status}"
-                        + (" · DAO" if o.source else "")
+                        + (" · series" if (o.source or "").startswith("series:") else (" · DAO" if o.source else ""))
                   for o in orders}
         picked = st.radio("Order", list(labels), format_func=labels.get, label_visibility="collapsed")
     else:
@@ -218,7 +218,9 @@ def show(order_id: int) -> None:
     st.subheader(f"Order #{o.id}: sell {total_tokens:,.0f} {sym(o.origin_asset)} → {sym(o.destination_asset)}")
     st.caption(f"{o.mode.upper()} · {o.status} · to `{o.recipient}` · deadline {aware(o.deadline_at):%Y-%m-%d %H:%M} UTC · "
                f"slices ≈ ${o.slice_usd:,.0f} · soft {o.soft_limit_bps:.0f} / hard {o.hard_limit_bps:.0f} bps"
-               + (f" · {dao_link(o)}" if dao_link(o) else (f" · {o.note.replace(' [archived]', '')}" if o.note else "")))
+               + (f" · {dao_link(o)}" if dao_link(o) else (f" · {o.note.replace(' [archived]', '')}" if o.note else ""))
+               + (f" · forecast: execution ~{o.pred_exec_bps:.0f} bps, timing risk ±{o.pred_risk_bps:.0f} bps"
+                  if o.pred_exec_bps is not None and o.pred_risk_bps is not None else ""))
     if o.mode == "shadow":
         st.info("Shadow mode: every decision uses real 1Click dry quotes, but nothing is signed or sent. "
                 "Fills are recorded at the dry quote; the worst case assumes liquidity never recovers between slices.",
@@ -286,23 +288,67 @@ def show(order_id: int) -> None:
         } for t in reversed(ticks[-200:])]), hide_index=True, width="stretch", height=280)
 
 
+def source_label(o: ParentOrder) -> str:
+    src = o.source or ""
+    if src.startswith("series:"):
+        return f"series #{src.split(':')[1]}"
+    return "DAO proposal" if src else "dashboard / CLI"
+
+
+def forecast_vs_actual(done_reports) -> None:
+    """Evidence series: the pre-trade forecast against what happened, by token and horizon."""
+    import math
+    groups: dict[tuple[str, float], list] = {}
+    for o, r in done_reports:
+        if not (o.source or "").startswith("series:") or r.execution_bps is None:
+            continue
+        hours = (aware(o.deadline_at) - aware(o.created_at)).total_seconds() / 3600
+        groups.setdefault((sym(o.origin_asset), round(hours, 2)), []).append((o, r))
+    if not groups:
+        return
+    mean = lambda xs: sum(xs) / len(xs) if xs else None
+    rows = []
+    for (token, hours), items in sorted(groups.items()):
+        pe = [o.pred_exec_bps for o, _ in items if o.pred_exec_bps is not None]
+        pr = [o.pred_risk_bps for o, _ in items if o.pred_risk_bps is not None]
+        timing = [r.timing_bps for _, r in items if r.timing_bps is not None]
+        rows.append({
+            "token": token, "horizon, h": f"{hours:g}", "orders": len(items),
+            "sold, avg": f"{mean([r.progress for _, r in items]):.0%}",
+            "forecast execution, bps": txt(mean(pe), "{:.0f}"),
+            "actual execution, bps": txt(mean([r.execution_bps for _, r in items]), "{:.0f}"),
+            "forecast timing risk ±, bps": txt(mean(pr), "{:.0f}"),
+            "actual timing, RMS bps": txt(math.sqrt(mean([t * t for t in timing])) if timing else None, "{:.0f}"),
+            "IS, avg bps": txt(mean([r.is_bps for _, r in items if r.is_bps is not None]), "{:.0f}"),
+        })
+    st.markdown("**Pre-trade forecast vs actual** (evidence series: the same order at every horizon, "
+                "started together, repeated across tokens and times of day)")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption("Forecast execution = impact curve at the slice size, measured when the order started. "
+               "Forecast timing risk = σ·√(0.9T/3), one standard deviation. If the model is right, actual "
+               "execution sits near the forecast and the RMS of timing sits near the forecast risk.")
+
+
 def results_table() -> None:
     """Every finished order in one table: the evidence across tokens, sizes and horizons."""
     with Session(get_engine()) as s:
         done = [o for o in s.exec(select(ParentOrder).where(ParentOrder.status == "DONE").order_by(ParentOrder.id))
                 if "[archived]" not in (o.note or "")]
-        rows = []
+        rows, done_reports = [], []
         for o in done:
             r = build_report(o, list(s.exec(select(Slice).where(Slice.order_id == o.id))))
+            done_reports.append((o, r))
             hours = (aware(o.deadline_at) - aware(o.created_at)).total_seconds() / 3600
             usd = int(o.total_in) / 10**o.origin_decimals * (o.arrival_mid or 0)
             rows.append({
-                "order": f"#{o.id}", "mode": o.mode, "source": "DAO proposal" if o.source else "dashboard / CLI",
+                "order": f"#{o.id}", "mode": o.mode, "source": source_label(o),
                 "token": sym(o.origin_asset),
                 "size, $": f"{usd:,.0f}", "sold": f"{r.progress:.0%}", "horizon, h": f"{hours:g}",
                 "slices": r.slices,
                 "slice, $": f"{o.slice_usd:,.0f}",
+                "forecast execution, bps": txt(o.pred_exec_bps, "{:.0f}"),
                 "execution, bps": txt(r.execution_bps, "{:.0f}"),
+                "forecast timing risk ±, bps": txt(o.pred_risk_bps, "{:.0f}"),
                 "timing, bps": txt(r.timing_bps, "{:.0f}"),
                 "IS, bps": txt(r.is_bps, "{:.0f}"),
                 "one swap at start, bps": "no liquidity" if r.oneshot_bps is None else f"{r.oneshot_bps:.0f}",
@@ -312,6 +358,8 @@ def results_table() -> None:
     if not rows:
         st.caption("No finished orders yet.")
         return
+    forecast_vs_actual(done_reports)
+    st.markdown("**Every finished order**")
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     st.caption("Sold below 100% = the deadline came first; the rest stays with the treasury. "
                "Execution = cost of the slices vs the benchmark at each slice (what the agent controls). "
@@ -367,7 +415,8 @@ st.divider()
 with st.expander("Start a shadow order (free: dry quotes only, nothing is signed or sent)", expanded=False):
     with Session(get_engine()) as s:
         active = sum(1 for o in s.exec(select(ParentOrder).where(ParentOrder.status == "ACTIVE",
-                                                                  ParentOrder.mode == "shadow")))
+                                                                  ParentOrder.mode == "shadow"))
+                     if not (o.source or "").startswith("series:"))   # the evidence series has its own slots
     full = active >= MAX_ACTIVE_SHADOW
     if full:
         st.info(f"{active} shadow orders are running (limit {MAX_ACTIVE_SHADOW}). You can still run the analysis; "

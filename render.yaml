@@ -18,5 +18,7 @@ services:
         sync: false          # comma-separated Sputnik DAO accounts, e.g. alexdesk.sputnikv2.testnet
       - key: DESK_DAO_NETWORK
         value: testnet
+      - key: DESK_SERIES
+        sync: false          # evidence series, e.g. RHEA:25000,AURORA:10000,wNEAR:25000 (empty = off)
       - key: PYTHON_VERSION
         value: 3.12.7

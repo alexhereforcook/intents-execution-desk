@@ -44,7 +44,9 @@ class ParentOrder(SQLModel, table=True):
     arrival_mid: float | None = None        # benchmark at start (micro-mid)
     oneshot_out: str | None = None          # dry quote for the whole size at start
     note: str | None = None                 # e.g. Sputnik DAO proposal link
-    source: str | None = Field(default=None, index=True)   # "sputnik:<net>:<dao>#<id>" or None
+    source: str | None = Field(default=None, index=True)   # "sputnik:<net>:<dao>#<id>", "series:<n>:<SYM>:<h>" or None
+    pred_exec_bps: float | None = None      # pre-trade forecast: execution cost at the chosen slice size
+    pred_risk_bps: float | None = None      # pre-trade forecast: 1-sigma timing risk for the horizon
     last_action: str | None = None          # last tick decision, for the dashboard
     finished_at: datetime | None = None
 
@@ -86,7 +88,7 @@ class QuoteSnapshot(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     order_id: int | None = Field(default=None, foreign_key="parentorder.id", index=True)
     ts: datetime = Field(default_factory=utcnow, index=True)
-    kind: str                               # micro | curve | oneshot | slice | recovery
+    kind: str                               # micro | curve | oneshot | watch (slice quotes live in TickLog)
     asset: str
     usd_size: float | None = None
     amount_in: str

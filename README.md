@@ -92,7 +92,7 @@ python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --h
 python -m desk.cli run             # the agent; Ctrl+C and restart any time
 python -m desk.cli status          # progress and TCA in the terminal
 streamlit run ui/app.py            # the dashboard
-pytest                             # 58 tests, no network needed
+pytest                             # 60 tests, no network needed
 ```
 
 ## How it works
@@ -140,6 +140,10 @@ Sputnik DAO --approved mandate--> agent (Render, 24/7)
    submitted slices are reconciled through `/v0/status`, never sent twice (tested).
 9. **TCA** (`desk/tca/metrics.py`): implementation shortfall = timing + execution, exactly,
    all in bps of the arrival price; savings vs one swap at the start.
+10. **Evidence series** (`desk/series.py`): with `DESK_SERIES=RHEA:25000,AURORA:10000,wNEAR:25000`
+   the worker runs the same shadow order at 0.5, 1, 2 and 4 hours, started together, then moves
+   to the next token, around the clock. Every order keeps its pre-trade forecast, and **Results
+   across orders** compares forecast and actual execution cost and timing risk by token and horizon.
 
 ## NEAR features used
 
@@ -182,6 +186,7 @@ desk/
   engine/desk.py       orders, ticks, shadow and live execution, restart reconciliation
   prices/pretrade.py   Almgren-Chriss horizon analysis, volatility estimate
   dao/sputnik.py       mandates from approved Sputnik DAO proposals
+  series.py            evidence series: one order at several horizons, token after token
   near/rpc.py          read-only NEAR RPC
   tca/metrics.py       implementation shortfall, timing, execution, savings
   db/models.py         orders, slices, quotes, decision log (SQLite locally, Postgres on Render)
