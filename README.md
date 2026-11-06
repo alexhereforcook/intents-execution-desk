@@ -92,7 +92,7 @@ python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --h
 python -m desk.cli run             # the agent; Ctrl+C and restart any time
 python -m desk.cli status          # progress and TCA in the terminal
 streamlit run ui/app.py            # the dashboard
-pytest                             # 60 tests, no network needed
+pytest                             # 61 tests, no network needed
 ```
 
 ## How it works

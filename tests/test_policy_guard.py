@@ -93,3 +93,16 @@ def test_guard_passes_normal_quote():
     r = check_live_quote(live_out=63_600_000, dry_out=63_650_000, amount_in=1000 * 10**18,
                          in_decimals=18, out_decimals=6, mid=0.0640, hard_bps=250)
     assert r.ok and r.live_cost_bps < 100
+
+
+def test_small_last_slice_is_not_stuck_waiting_for_recovery():
+    # Nov 5, order #15: 19 slices of $500 sold, $400 left, schedule over, last fill was cheap,
+    # quotes stayed >10 bps worse, and the agent waited until the deadline.
+    from datetime import datetime, timedelta, timezone
+    from desk.engine.policy import Limits, TickState, decide
+    t0 = datetime(2026, 11, 5, tzinfo=timezone.utc)
+    s = TickState(now=t0 + timedelta(hours=3.7), start=t0, deadline=t0 + timedelta(hours=4),
+                  total_in=9900, done_in=9500, slice_in=500, cost_bps=60,
+                  last_fill_at=t0 + timedelta(hours=3.5), last_fill_cost_bps=20)
+    d = decide(s, Limits(150, 250))
+    assert d.action == "EXECUTE" and d.amount_in == 400

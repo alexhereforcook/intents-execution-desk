@@ -83,8 +83,10 @@ def decide(s: TickState, lim: Limits) -> Decision:
         return Decision("WAIT", f"{since_last:.0f}s since last slice, min gap {MIN_GAP_S}s",
                         recovered=recovered)
 
-    # well behind schedule: trade anything within the hard limit
-    if behind >= s.slice_in:
+    # well behind schedule: trade anything within the hard limit. Compared with the next
+    # slice, not the full slice size: the last slice is often smaller, and with slice_in here
+    # an AURORA 4 h order (Nov 5, #15) waited out its deadline with 4% unsold.
+    if behind >= amount:
         return Decision("EXECUTE", f"behind schedule by {behind / s.slice_in:.1f} slices",
                         amount, recovered)
 
