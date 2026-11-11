@@ -34,6 +34,7 @@ from desk.prices.benchmark import (MICRO_SIZES_USD, TokenInfo, build_curve, impa
 from desk.prices.pretrade import Pretrade, analyse, choose_slice_usd, cost_at, estimate_sigma
 
 PAUSE_NOTE_S = 180
+MIN_CALIBRATION_ORDERS = 8   # finished orders of a token before its risk forecast is rescaled
 BENCHMARK_TTL_S = 60   # Nov 3 run: with 120 s some slices showed 1-3 bps vs a stale mid
 LIVE_QUOTE_DEADLINE_S = 180
 SHADOW_ACCOUNT = "0" * 64      # dry quotes need an account id; nothing is sent
@@ -119,6 +120,36 @@ class ExecutionDesk:
                 QuoteSnapshot.kind.in_(["watch", "micro"]))).all()
         return estimate_sigma([(aware(ts), mid) for ts, mid in rows])
 
+    def risk_calibration(self, asset: str) -> tuple[float, int]:
+        """How wrong the timing-risk forecast has been for this token, from finished orders.
+
+        factor = RMS of (realised timing / raw forecast risk). 1.0 = calibrated. The Nov 5-11
+        evidence series found AURORA ~1.9 (sigma from 5-minute samples misses its jumps),
+        RHEA ~1.3, wNEAR ~1.1. Fewer than MIN_CALIBRATION_ORDERS orders: no correction."""
+        from sqlmodel import select
+        from desk.tca.metrics import build_report
+        ratios = []
+        with Session(self.engine) as s:
+            done = s.exec(select(ParentOrder).where(ParentOrder.origin_asset == asset,
+                                                    ParentOrder.status == "DONE",
+                                                    ParentOrder.pred_risk_bps.is_not(None))).all()
+            for o in done:
+                raw = o.pred_risk_bps / (o.risk_scale or 1.0)
+                r = build_report(o, order_slices(s, o.id))
+                if raw > 0 and r.timing_bps is not None and r.progress > 0.95:
+                    ratios.append(r.timing_bps / raw)
+        if len(ratios) < MIN_CALIBRATION_ORDERS:
+            return 1.0, len(ratios)
+        factor = math.sqrt(sum(x * x for x in ratios) / len(ratios))
+        return min(max(factor, 0.5), 3.0), len(ratios)
+
+    def calibrated_sigma(self, asset: str) -> tuple[float, str, float]:
+        sigma, note = self.sigma(asset)
+        factor, n = self.risk_calibration(asset)
+        if factor != 1.0:
+            note += f"; scaled x{factor:.2f} from {n} finished orders (realised vs forecast timing)"
+        return sigma * factor, note, factor
+
     def pretrade(self, *, origin_asset: str, amount_in: int, soft_bps: float,
                  risk_aversion: float = 1.0) -> Pretrade:
         stub = self._stub(origin_asset)
@@ -130,7 +161,7 @@ class ExecutionDesk:
             oneshot = impact_bps(self._price(stub, amount_in, out), curve.mid)
         except NoLiquidity:
             oneshot = None
-        sigma, note = self.sigma(origin_asset)
+        sigma, note, _ = self.calibrated_sigma(origin_asset)
         return analyse(order_usd, curve, sigma, note, oneshot, soft_bps, risk_aversion)
 
     # ---------- DAO mandates ----------
@@ -189,7 +220,7 @@ class ExecutionDesk:
         except NoLiquidity:
             oneshot = None
         # the pre-trade forecast for this horizon, kept so results can be checked against it
-        sigma, _ = self.sigma(origin_asset)
+        sigma, _, risk_scale = self.calibrated_sigma(origin_asset)
         pred_exec = cost_at(curve, slice_usd)
         pred_risk = sigma * math.sqrt(hours * SCHEDULE_END_FRACTION / 3) * 1e4
 
@@ -202,7 +233,7 @@ class ExecutionDesk:
                         slice_in=str(min(slice_in, amount_in)), hard_limit_bps=hard_bps,
                         soft_limit_bps=soft_bps, arrival_mid=curve.mid,
                         oneshot_out=None if oneshot is None else str(oneshot), note=note, source=source,
-                        pred_exec_bps=pred_exec, pred_risk_bps=pred_risk)
+                        pred_exec_bps=pred_exec, pred_risk_bps=pred_risk, risk_scale=risk_scale)
         with Session(self.engine) as s:
             s.add(o)
             s.commit()

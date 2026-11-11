@@ -40,3 +40,36 @@ def test_batch_runs_every_horizon_and_waits_for_the_batch_to_finish(tmp_path):
     assert {parse_source(o.source)[0] for o in second} == {2}
     usd = [int(o.total_in) / 1e18 * o.arrival_mid for o in second]
     assert all(abs(u - 2000) / 2000 < 0.01 for u in usd)               # rotated to the second entry
+
+
+def _done_order(engine, asset, pred_risk, timing_bps, risk_scale=None):
+    from datetime import datetime, timezone
+    from desk.db.models import Slice
+    with Session(engine) as s:
+        o = ParentOrder(origin_asset=asset, origin_decimals=0, destination_asset="usdc", destination_decimals=0,
+                        total_in="100", recipient="dao", deadline_at=datetime.now(timezone.utc), slice_usd=1,
+                        hard_limit_bps=250, soft_limit_bps=150, arrival_mid=1.0, status="DONE",
+                        pred_risk_bps=pred_risk, risk_scale=risk_scale)
+        s.add(o)
+        s.commit()
+        s.refresh(o)
+        mid = 1 - timing_bps / 1e4
+        s.add(Slice(order_id=o.id, seq=1, amount_in="100", status="SHADOW_FILLED",
+                    mid_at_quote=mid, executed_out=str(int(100 * mid))))
+        s.commit()
+
+
+def test_risk_forecast_is_rescaled_by_its_own_track_record(tmp_path):
+    clock, engine, desk = make(tmp_path)
+    asset = "nep141:token.test.near"
+    for i in range(7):
+        _done_order(engine, asset, pred_risk=50, timing_bps=100 if i % 2 else -100)
+    assert desk.risk_calibration(asset) == (1.0, 7)          # too few orders: no correction
+    _done_order(engine, asset, pred_risk=100, timing_bps=-100, risk_scale=2.0)   # raw forecast was 50
+    factor, n = desk.risk_calibration(asset)
+    assert n == 8 and abs(factor - 2.0) < 0.05               # realised timing ~2x the raw forecast
+    sigma, note, scale = desk.calibrated_sigma(asset)
+    assert scale == factor and "scaled x2.00 from 8 finished orders" in note
+    o = desk.create_order(origin_asset=asset, amount_in=10**21, recipient="dao", hours=1,
+                          soft_bps=150, hard_bps=250)
+    assert o.risk_scale == factor

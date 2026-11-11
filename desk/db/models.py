@@ -47,6 +47,7 @@ class ParentOrder(SQLModel, table=True):
     source: str | None = Field(default=None, index=True)   # "sputnik:<net>:<dao>#<id>", "series:<n>:<SYM>:<h>" or None
     pred_exec_bps: float | None = None      # pre-trade forecast: execution cost at the chosen slice size
     pred_risk_bps: float | None = None      # pre-trade forecast: 1-sigma timing risk for the horizon
+    risk_scale: float | None = None         # calibration factor already applied to pred_risk_bps
     last_action: str | None = None          # last tick decision, for the dashboard
     finished_at: datetime | None = None
 

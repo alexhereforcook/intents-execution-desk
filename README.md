@@ -26,30 +26,51 @@ loss vs. the reference price including the 1Click fee (Oct 23-24, 2026):
 
 On Nov 3, 2026 a $25,000 RHEA sell had **no quote at all** as a single swap.
 
-## Results on live quotes (shadow mode, Nov 5, 2026)
+## Evidence: 162 shadow orders, Nov 5-11, 2026
 
-Two orders started from the dashboard and left alone; the agent ran them on Render with nobody
-watching.
+The worker ran an evidence series around the clock for six days: the same order at 0.5, 1, 2
+and 4 hours, all four started at the same moment, then the next token. 41 batches, 162 orders,
+all on live 1Click quotes (shadow mode: nothing signed). Raw data:
+[`docs/evidence_series_orders.csv`](docs/evidence_series_orders.csv).
 
-| | RHEA -> USDC | AURORA -> USDC |
-| --- | --- | --- |
-| Size, horizon | $24,822, 2 h | $9,950, 1 h |
-| Sold | 100%, 21 slices of ~$1.2k, on schedule | 100%, 10 slices of ~$1k, on schedule |
-| Execution cost vs benchmark | 44 bps | 63 bps |
-| Timing (market move) | -25 bps (price rose) | +14 bps |
-| Implementation shortfall | **19 bps** | **77 bps** |
-| One swap at the start | **impossible** (no liquidity for $25k) | 802 bps |
-| Saved vs one swap | the sale was possible at all | 725 bps, about $721 |
+![Execution forecast vs actual, timing risk calibration, total cost by horizon](docs/evidence_series.png)
 
-How to read this: shadow fills assume liquidity recovered between slices, as measured by the
-next dry quote. The worst case (no recovery at all) is also recorded: 806 bps for AURORA, i.e.
-about the same as one swap. A real run lands between the two; the live path exists to measure
-where.
+| | RHEA, $25k | AURORA, $10k | wNEAR, $25k |
+| --- | --- | --- | --- |
+| Batches | 14 | 14 | 13 |
+| Avg implementation shortfall at 0.5 / 1 / 2 / 4 h, bps | 129 / **84** / 88 / 126 | 101 / 83 / **52** / 65 | **38** / 59 / 66 / 69 |
+| One swap at the start | **no quote at all** (56 of 56 tries) | ~847 bps | ~26 bps |
+| Execution-cost forecast, median error | 3 bps | 8 bps | 2 bps |
+| Realised / forecast timing risk | 1.3x | 1.9x | 1.1x |
 
-**What changed since the first run (Nov 3).** The first RHEA run used $5k slices and traded
-whenever quotes looked good: 80% sold in 46 minutes at 128 bps. Fixes: slice size follows the
-horizon (about one slice per 5 minutes), no trading ahead of schedule, and the free host is kept
-awake from inside (it used to sleep and leave orders half sold). All three are covered by tests.
+What this shows:
+
+1. **The execution-cost forecast works.** Read off the impact curve when the order starts, it
+   misses the realised cost by a median 4 bps over 162 orders (correlation 0.95). On longer
+   horizons the agent beats it by a few bps: it has time to wait for good quotes.
+2. **There is a best horizon, and it is not "as slow as possible".** Selling faster costs more
+   impact; selling slower leaves the order exposed to the market. For RHEA the cheapest horizon
+   was 1 h, for AURORA 2 h. That is the Almgren-Chriss trade-off the pre-trade analysis models.
+3. **For an illiquid token the agent is the only way to sell.** $25k of RHEA had no quote as one
+   swap in any of 56 tries; sliced, it sold at 84 bps on average (1 h). $10k of AURORA cost ~847
+   bps as one swap and 52 bps over 2 hours: about **$790 saved per order**.
+4. **For a liquid token it is not needed, and the agent says so.** wNEAR as one swap costs ~26 bps
+   (mostly the 1Click fee); any schedule only adds timing risk. The pre-trade analysis recommends
+   the single swap.
+5. **The timing-risk forecast was too optimistic for AURORA (1.9x).** Volatility from 5-minute
+   samples misses its jumps. Fixed on Nov 11: the agent now rescales each token's risk forecast
+   by its own track record (RMS of realised / forecast timing, once it has 8 finished orders)
+   and says so in the analysis. For AURORA this moves the recommendation towards shorter horizons.
+
+Caveats. Orders in a batch share the same market, so the timing statistics rest on 13-14
+independent batches per token, not 54. Shadow fills assume liquidity recovers between slices as
+the next dry quote shows; the worst case (no recovery) is stored per slice and is close to one
+swap. 158 of 162 orders sold 100%; four stopped at 70-96% when the deadline came (one from a
+last-slice bug fixed on Nov 6), and by design the rest stays with the treasury.
+
+**Earlier runs.** The first RHEA run (Nov 3) used $5k slices and sold 80% in 46 min at 128 bps.
+Slice size now follows the horizon, the agent never trades ahead of schedule, and the free host
+is kept awake from inside (it used to sleep and leave orders half sold).
 
 ## Try it
 
@@ -92,7 +113,7 @@ python -m desk.cli new-order RHEA --usd 25000 --to treasury.sputnik-dao.near --h
 python -m desk.cli run             # the agent; Ctrl+C and restart any time
 python -m desk.cli status          # progress and TCA in the terminal
 streamlit run ui/app.py            # the dashboard
-pytest                             # 61 tests, no network needed
+pytest                             # 62 tests, no network needed
 ```
 
 ## How it works
@@ -114,7 +135,8 @@ Sputnik DAO --approved mandate--> agent (Render, 24/7)
 2. **Pre-trade analysis** (`desk/prices/pretrade.py`): the Almgren-Chriss trade-off. A faster
    sale needs bigger slices and each costs more (read off the impact curve); a slower sale risks
    the price drifting, 1-sigma timing risk = sigma * sqrt(T/3) for a linear schedule. Volatility
-   comes from benchmark samples the worker records every 5 minutes (robust to single bad quotes).
+   comes from benchmark samples the worker records every 5 minutes (robust to single bad quotes),
+   then rescaled by the token's own track record: realised vs forecast timing on finished orders.
    The recommended horizon minimises cost + risk; "one swap now" is one of the options, and for a
    liquid token it usually wins. Horizons that need slices faster than every 2 minutes are marked
    infeasible.
@@ -171,7 +193,8 @@ Sputnik DAO --approved mandate--> agent (Render, 24/7)
 - **The demo DAO lives on testnet** (free); quotes are mainnet. Funded (Transfer) mandates are
   mainnet only and have not been run with real funds.
 - **Volatility needs history:** until the worker has ~1 hour of samples for a token, the
-  pre-trade analysis uses a default 1.5% per sqrt(hour) and says so.
+  pre-trade analysis uses a default 1.5% per sqrt(hour) and says so. The risk forecast is
+  rescaled only after 8 finished orders of that token.
 
 ## Layout
 
